@@ -2,7 +2,7 @@
 
 **Totally private, totally local, and totally free!**
 
-Hold a key, talk, release — the transcript lands at your cursor in whatever app is frontmost. Everything runs on-device (whisper.cpp on Apple Silicon); after setup the tool makes **zero network requests** beyond HTTP to `127.0.0.1`.
+Hold a key, talk, release — the transcript lands at your cursor in whatever app is frontmost. Everything runs on-device (whisper.cpp on Apple Silicon, with the **small.en** model by default); after setup the tool makes **zero network requests** beyond HTTP to `127.0.0.1`.
 
 ## Install
 
