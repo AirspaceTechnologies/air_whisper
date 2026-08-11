@@ -1,5 +1,7 @@
 # air_whisper — local push-to-talk dictation for macOS
 
+**Totally private, totally local, and totally free!**
+
 Hold a key, talk, release — the transcript lands at your cursor in whatever app is frontmost. Everything runs on-device (whisper.cpp on Apple Silicon); after setup the tool makes **zero network requests** beyond HTTP to `127.0.0.1`.
 
 ## Install
