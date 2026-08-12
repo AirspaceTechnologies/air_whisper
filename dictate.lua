@@ -137,7 +137,7 @@ local function resolveDevice()
   return deviceCache[1], "first-available"
 end
 
--- ---------------------------------------------------------------- indicator + menu
+-- ---------------------------------------------------------------- indicator
 
 local menubar = hs.menubar.new()
 local pill = nil
@@ -170,10 +170,12 @@ local function setPillText(text)
 end
 
 local state = "idle" -- idle | recording | transcribing
+local stateChangedAt = hs.timer.secondsSinceEpoch()
 local currentMicLabel = nil -- shown in the pill so each recording self-reports its mic
 
 local function setState(s)
   state = s
+  stateChangedAt = hs.timer.secondsSinceEpoch()
   if s == "idle" then
     menubar:setTitle("🎤")
     hidePill()
@@ -185,6 +187,23 @@ local function setState(s)
     setPillText("✍️ Transcribing…")
   end
 end
+
+-- Wrap tap/task callbacks so a Lua error logs and resets to idle instead of
+-- freezing the pipeline mid-state (a frozen "Listening…" pill is worse than a
+-- dropped dictation).
+local function safely(fn, where)
+  return function(...)
+    local ok, ret = pcall(fn, ...)
+    if ok then return ret end
+    log("LUA ERROR in " .. where .. ": " .. tostring(ret))
+    hs.alert.show("Dictation error — see log")
+    pcall(os.remove, WAV)
+    pcall(setState, "idle")
+    return false
+  end
+end
+
+-- ---------------------------------------------------------------- menu
 
 -- Screens sorted by x position, labeled "(left)"/"(right)" when there are two.
 local function screensWithLabels()
@@ -255,6 +274,8 @@ local function buildMenu()
     table.insert(assign, { title = entry.title, menu = sub })
   end
   table.insert(items, { title = "Assign screen mics", menu = assign })
+  table.insert(items, { title = "-" })
+  table.insert(items, { title = "Restart dictation", fn = function() hs.reload() end })
   refreshDevices() -- so the next open reflects any device changes
   return items
 end
@@ -363,10 +384,10 @@ end
 local transcribe -- forward declaration (retry recursion)
 
 local function transcribeCli(wav)
-  local t = hs.task.new(config.cli_bin, function(code, out, err)
+  local t = hs.task.new(config.cli_bin, safely(function(code, out, err)
     if code == 0 then handleTranscript(out)
     else failRun("whisper-cli failed (" .. tostring(code) .. ")", err) end
-  end, { "-m", config.model_path, "-f", wav, "--no-timestamps",
+  end, "cli-transcribe"), { "-m", config.model_path, "-f", wav, "--no-timestamps",
          "-l", config.language, "-t", "4" })
   t:start()
 end
@@ -374,7 +395,7 @@ end
 transcribe = function(wav, isRetry)
   setState("transcribing")
   if config.transcribe_mode == "cli" then return transcribeCli(wav) end
-  local t = hs.task.new("/usr/bin/curl", function(code, out, err)
+  local t = hs.task.new("/usr/bin/curl", safely(function(code, out, err)
     if code == 0 then
       handleTranscript(out)
     elseif code == 7 and not isRetry then
@@ -385,7 +406,7 @@ transcribe = function(wav, isRetry)
     else
       failRun("transcription failed (curl exit " .. tostring(code) .. ")", err)
     end
-  end, { "-s", "--max-time", "30", SERVER_URL,
+  end, "transcribe"), { "-s", "--max-time", "30", SERVER_URL,
          "-F", "file=@" .. wav,
          "-F", "response_format=text",
          "-F", "language=" .. config.language,
@@ -398,9 +419,17 @@ end
 local recTask = nil
 local holdStart = 0
 local canceled = false
+local watchdog = nil
+local pttDown = false
+local flagsTap -- assigned in the hotkey section; the watchdog re-enables it
+
+local function stopWatchdog()
+  if watchdog then watchdog:stop() watchdog = nil end
+end
 
 local function onRecordingDone(code, _, err)
   if growTimer then growTimer:stop() growTimer = nil end
+  stopWatchdog()
   local heldFor = hs.timer.secondsSinceEpoch() - holdStart
   if canceled or heldFor < config.min_duration_s then
     finishRun() -- silent discard
@@ -415,6 +444,19 @@ local function onRecordingDone(code, _, err)
   end
 end
 
+local function stopRecording()
+  if state ~= "recording" or canceled then return end
+  if recTask and recTask:isRunning() then
+    recTask:interrupt() -- SIGINT finalizes the WAV header; completion runs onRecordingDone
+  end
+end
+
+local function cancelRecording()
+  if state ~= "recording" or canceled then return end
+  canceled = true
+  if recTask and recTask:isRunning() then recTask:interrupt() end
+end
+
 local function startRecording()
   if state ~= "idle" then return end
   local dev, how = resolveDevice()
@@ -426,7 +468,7 @@ local function startRecording()
   canceled = false
   holdStart = hs.timer.secondsSinceEpoch()
   os.remove(WAV)
-  recTask = hs.task.new(config.ffmpeg_bin, onRecordingDone, {
+  recTask = hs.task.new(config.ffmpeg_bin, safely(onRecordingDone, "recording-done"), {
     "-y", "-f", "avfoundation",
     "-audio_device_index", tostring(dev.globalIndex),
     "-i", ":", -- device comes from the index above; avfoundation ignores the name
@@ -447,26 +489,29 @@ local function startRecording()
       if growTimer then growTimer:stop() growTimer = nil end
     end
   end)
-end
-
-local function stopRecording()
-  if state ~= "recording" or canceled then return end
-  if recTask and recTask:isRunning() then
-    recTask:interrupt() -- SIGINT finalizes the WAV header; completion runs onRecordingDone
-  end
-end
-
-local function cancelRecording()
-  if state ~= "recording" or canceled then return end
-  canceled = true
-  if recTask and recTask:isRunning() then recTask:interrupt() end
+  -- watchdog: a flagsChanged keyup can be lost (event tap disabled by a
+  -- timeout, secure input, ...) which would leave the recording stuck until
+  -- the -t cap. Poll the real modifier state and stop as if released.
+  watchdog = hs.timer.doEvery(0.25, function()
+    if state ~= "recording" then
+      stopWatchdog()
+      return
+    end
+    if flagsTap and not flagsTap:isEnabled() then
+      log("watchdog: event tap was disabled, re-enabling")
+      flagsTap:start()
+    end
+    if pttDown and not hs.eventtap.checkKeyboardModifiers()[ptt.flag] then
+      log("watchdog: missed keyup, stopping recording")
+      pttDown = false
+      stopRecording()
+    end
+  end)
 end
 
 -- ---------------------------------------------------------------- hotkey
 
-local pttDown = false
-
-local flagsTap = hs.eventtap.new({ hs.eventtap.event.types.flagsChanged }, function(e)
+flagsTap = hs.eventtap.new({ hs.eventtap.event.types.flagsChanged }, safely(function(e)
   if e:getKeyCode() ~= ptt.keycode then return false end
   local isDown = e:getFlags()[ptt.flag] == true
   if isDown and not pttDown then
@@ -477,17 +522,32 @@ local flagsTap = hs.eventtap.new({ hs.eventtap.event.types.flagsChanged }, funct
     stopRecording()
   end
   return false
-end)
+end, "flags-tap"))
 
 -- Any regular key while PTT is held (fn+arrows, fn+delete, ...) cancels the
 -- recording and passes through untouched.
-local keyTap = hs.eventtap.new({ hs.eventtap.event.types.keyDown }, function(e)
+local keyTap = hs.eventtap.new({ hs.eventtap.event.types.keyDown }, safely(function(e)
   if state == "recording" then cancelRecording() end
   return false
+end, "key-tap"))
+
+-- Last-resort self-heal: if some failure mode we haven't met yet leaves the
+-- pipeline in a non-idle state well past every legitimate bound (recording is
+-- capped at max_duration_s, transcription at 30s), force it back to idle.
+local stuckGuard = hs.timer.doEvery(15, function()
+  local stuckFor = hs.timer.secondsSinceEpoch() - stateChangedAt
+  if state ~= "idle" and stuckFor > config.max_duration_s + 45 then
+    log(string.format("stuck-state guard: state=%s for %.0fs, forcing idle", state, stuckFor))
+    hs.alert.show("Dictation reset (was stuck)")
+    pcall(function() if recTask and recTask:isRunning() then recTask:terminate() end end)
+    stopWatchdog()
+    finishRun()
+  end
 end)
 
 -- ---------------------------------------------------------------- init
 
+hs.execute('/usr/bin/pkill -f "' .. WAV .. '"') -- stray recorder from a crash
 os.remove(WAV) -- clear any leftover audio from a crash
 refreshDevices()
 hs.audiodevice.watcher.setCallback(function(event)
@@ -503,12 +563,13 @@ hs.shutdownCallback = stopServer
 log("dictate.lua loaded; hotkey=" .. config.hotkey .. "; mic_mode=" .. micMode)
 hs.alert.show("Dictation ready — hold " .. config.hotkey .. " to talk")
 
--- keep references alive (Hammerspoon GC collects unanchored taps/menubars);
+-- keep references alive (Hammerspoon GC collects unanchored taps/timers/menubars);
 -- debug() dumps mic state for troubleshooting via `hs -c`.
 return {
   flagsTap = flagsTap,
   keyTap = keyTap,
   menubar = menubar,
+  stuckGuard = stuckGuard,
   debug = function()
     return hs.inspect({ mode = micMode, fixed = fixedLabel, map = screenMap, devices = deviceCache })
   end,

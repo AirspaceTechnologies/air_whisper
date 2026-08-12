@@ -59,11 +59,21 @@ The pill names the mic on every recording, so a wrong pairing is immediately vis
 
 After editing the config: Hammerspoon menu (🔨) → Reload Config.
 
+## If it gets stuck — restarting
+
+The tool self-heals in layers: a watchdog stops the recording within ~¼ s if macOS ever eats the key-release event, and a stuck-state guard force-resets the pipeline if any state outlives its legitimate bounds. If the UI ever freezes anyway:
+
+- **🎤 menu → Restart dictation** (reloads the Hammerspoon config), or
+- quit/kill Hammerspoon and relaunch it: **`open -a Hammerspoon`** (or Spotlight → "Hammerspoon"). On load the module kills any stray recorder process and deletes leftover audio, so a hard kill never leaves the mic open past the 120 s cap or audio on disk.
+
+Tip: enable **"Launch Hammerspoon at login"** in Hammerspoon's preferences so the tool is always resident.
+
 ## Troubleshooting
 
 | Symptom | Fix |
 |---|---|
 | Nothing is inserted | Accessibility permission missing → grant, restart Hammerspoon |
+| Stuck on "Listening…" | Should self-recover in ~¼ s (watchdog); if truly frozen, see "If it gets stuck" above |
 | Hotkey does nothing | Input Monitoring permission, or Globe key still bound to a system action, or a non-Apple keyboard swallowing fn |
 | No audio / garbage text | Wrong mic — check the name in the pill and `~/.dictate/log.txt`, fix via the 🎤 menu |
 | Wrong display's mic in auto mode | Swap the pairing: re-run `./calibrate.sh` or 🎤 menu → Assign screen mics |
