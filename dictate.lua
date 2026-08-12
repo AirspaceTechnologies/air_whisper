@@ -444,17 +444,31 @@ local function onRecordingDone(code, _, err)
   end
 end
 
+-- SIGINT finalizes the WAV header; completion runs onRecordingDone. A
+-- write-blocked or device-stalled ffmpeg ignores catchable signals, so
+-- escalate to SIGKILL after a grace period — losing one dictation beats
+-- an invisible open mic.
+local function interruptRecorder()
+  if not (recTask and recTask:isRunning()) then return end
+  recTask:interrupt()
+  local t = recTask
+  hs.timer.doAfter(3, function()
+    if t:isRunning() then
+      log("recorder ignored SIGINT for 3s — sending SIGKILL")
+      hs.execute("/bin/kill -9 " .. tostring(t:pid()))
+    end
+  end)
+end
+
 local function stopRecording()
   if state ~= "recording" or canceled then return end
-  if recTask and recTask:isRunning() then
-    recTask:interrupt() -- SIGINT finalizes the WAV header; completion runs onRecordingDone
-  end
+  interruptRecorder()
 end
 
 local function cancelRecording()
   if state ~= "recording" or canceled then return end
   canceled = true
-  if recTask and recTask:isRunning() then recTask:interrupt() end
+  interruptRecorder()
 end
 
 local function startRecording()
@@ -468,7 +482,12 @@ local function startRecording()
   canceled = false
   holdStart = hs.timer.secondsSinceEpoch()
   os.remove(WAV)
+  -- -nostats/-loglevel error: ffmpeg must NOT chatter on stderr. If Hammerspoon
+  -- reloads mid-recording, nothing drains the pipe; once it fills, every
+  -- write() blocks and the process becomes immune to SIGINT/SIGTERM while
+  -- holding the mic open (observed: 40 min). Silence makes that impossible.
   recTask = hs.task.new(config.ffmpeg_bin, safely(onRecordingDone, "recording-done"), {
+    "-nostats", "-loglevel", "error",
     "-y", "-f", "avfoundation",
     "-audio_device_index", tostring(dev.globalIndex),
     "-i", ":", -- device comes from the index above; avfoundation ignores the name
@@ -539,7 +558,11 @@ local stuckGuard = hs.timer.doEvery(15, function()
   if state ~= "idle" and stuckFor > config.max_duration_s + 45 then
     log(string.format("stuck-state guard: state=%s for %.0fs, forcing idle", state, stuckFor))
     hs.alert.show("Dictation reset (was stuck)")
-    pcall(function() if recTask and recTask:isRunning() then recTask:terminate() end end)
+    pcall(function()
+      if recTask and recTask:isRunning() then
+        hs.execute("/bin/kill -9 " .. tostring(recTask:pid()))
+      end
+    end)
     stopWatchdog()
     finishRun()
   end
@@ -547,7 +570,9 @@ end)
 
 -- ---------------------------------------------------------------- init
 
-hs.execute('/usr/bin/pkill -f "' .. WAV .. '"') -- stray recorder from a crash
+-- SIGKILL stray recorders from a crash/reload: a write-blocked one ignores
+-- everything milder (see the -nostats note in startRecording)
+hs.execute('/usr/bin/pkill -9 -f "' .. WAV .. '"')
 os.remove(WAV) -- clear any leftover audio from a crash
 refreshDevices()
 hs.audiodevice.watcher.setCallback(function(event)
@@ -559,7 +584,17 @@ menubar:setMenu(buildMenu)
 flagsTap:start()
 keyTap:start()
 setState("idle")
-hs.shutdownCallback = stopServer
+hs.shutdownCallback = function()
+  -- runs on quit AND on config reload: never abandon a live recorder — after
+  -- a reload nothing drains its stderr pipe and no Lua state can reach it
+  pcall(function()
+    if recTask and recTask:isRunning() then
+      hs.execute("/bin/kill -9 " .. tostring(recTask:pid()))
+    end
+  end)
+  pcall(os.remove, WAV)
+  stopServer()
+end
 log("dictate.lua loaded; hotkey=" .. config.hotkey .. "; mic_mode=" .. micMode)
 hs.alert.show("Dictation ready — hold " .. config.hotkey .. " to talk")
 
