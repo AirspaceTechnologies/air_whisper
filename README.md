@@ -63,6 +63,8 @@ After editing the config: Hammerspoon menu (🔨) → Reload Config.
 
 The tool self-heals in layers: a watchdog stops the recording within ~¼ s if macOS ever eats the key-release event, and a stuck-state guard force-resets the pipeline if any state outlives its legitimate bounds. If the UI ever freezes anyway:
 
+- **First, run `./diagnose.sh`** (before killing anything). It saves a thread sample of the frozen process, Hammerspoon's system log, and the dictation log to a folder on your Desktop — the Console window's scrollback dies with the process, but these survive. Then:
+
 - **🎤 menu → Restart dictation** (reloads the Hammerspoon config), or
 - quit/kill Hammerspoon and relaunch it: **`open -a Hammerspoon`** (or Spotlight → "Hammerspoon"). On load the module kills any stray recorder process and deletes leftover audio, so a hard kill never leaves the mic open past the 120 s cap or audio on disk.
 
