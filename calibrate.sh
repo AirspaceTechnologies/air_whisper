@@ -77,14 +77,21 @@ lua_escape() { local s=${1//\\/\\\\}; printf '%s' "${s//\"/\\\"}"; }
 L_MIC=$(lua_escape "$LEFT_MIC"); R_MIC=$(lua_escape "$RIGHT_MIC")
 DUP_ESC=$(lua_escape "$DUP_NAME")
 
-# calibration-time identity: the duplicate group's CoreAudio UID order. The
-# module compares this at load/device-change and warns to recalibrate if the
-# twins ever re-enumerate differently — ordinals (1)/(2) alone are not identity.
+# calibration-time identity: the twin group's CoreAudio UID SET, sorted —
+# order carries no cross-API meaning. The module alerts when a twin is
+# REPLACED; a same-twins order flip is undetectable (recalibration is the
+# ground truth, documented in the README).
 UIDS=$("$HS" -c "local t = {}
 for _, d in ipairs(hs.audiodevice.allInputDevices()) do
   if d:name() == \"$DUP_ESC\" then t[#t + 1] = d:uid() or \"?\" end
 end
+table.sort(t)
 print(table.concat(t, \"|\"))" 2>/dev/null | tail -1)
+# UID capture must be verified BEFORE anything is written: an unresponsive
+# Hammerspoon yields empty output here, which would silently disable the
+# module's drift check while this script still reported success
+[[ "$(awk -F'|' '{print NF}' <<<"$UIDS")" == "2" && "$UIDS" != *"?"* ]] \
+  || die "could not capture both microphone UIDs (got: '${UIDS:-empty}') — is Hammerspoon responsive?"
 
 "$HS" -c "hs.settings.set(\"dictate.screen_map\", {
   [\"$LEFT_UUID\"]  = \"$L_MIC\",
@@ -93,9 +100,12 @@ print(table.concat(t, \"|\"))" 2>/dev/null | tail -1)
 hs.settings.set(\"dictate.mic_mode\", \"auto\")
 hs.settings.set(\"dictate.calibration_uids\", \"$UIDS\")" >/dev/null 2>&1 || true
 
+# verify ALL THREE keys (separator chosen to never appear in device names)
 GOT=$("$HS" -c "local m = hs.settings.get(\"dictate.screen_map\") or {}
-print((m[\"$LEFT_UUID\"] or \"MISSING\") .. \" / \" .. (m[\"$RIGHT_UUID\"] or \"MISSING\"))" 2>/dev/null | tail -1)
-[[ "$GOT" == "$LEFT_MIC / $RIGHT_MIC" ]] \
+print((m[\"$LEFT_UUID\"] or \"MISSING\") .. \"|::|\" .. (m[\"$RIGHT_UUID\"] or \"MISSING\")
+      .. \"|::|\" .. tostring(hs.settings.get(\"dictate.mic_mode\"))
+      .. \"|::|\" .. tostring(hs.settings.get(\"dictate.calibration_uids\")))" 2>/dev/null | tail -1)
+[[ "$GOT" == "$LEFT_MIC|::|$RIGHT_MIC|::|auto|::|$UIDS" ]] \
   || die "settings write failed — read back: $GOT"
 
 # reload last; the IPC disconnect it causes is expected and harmless

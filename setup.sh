@@ -40,14 +40,23 @@ if [[ -z "$WHISPER_SERVER" ]]; then TRANSCRIBE_MODE="cli"; fi
 
 # The server must honor the per-request token_timestamps field (v1.8.5+,
 # PR #3785), or long dictations hit the 60-char mid-word wrapping regression
-# introduced in v1.8.4. The field name survives compilation only as the
-# request-parsing string literal, so strings(1) is a reliable capability
-# probe — and it works for non-Homebrew builds too.
-if [[ "$TRANSCRIBE_MODE" == "server" ]] \
-   && ! strings "$WHISPER_SERVER" 2>/dev/null | grep -q token_timestamps; then
-  die "whisper-cpp is too old (< 1.8.5): whisper-server does not support the
-per-request token_timestamps field this tool depends on.
-Upgrade with:  brew upgrade whisper-cpp   then re-run ./setup.sh"
+# introduced in v1.8.4. Version is only trustworthy from Homebrew's records:
+# string-probing the binary false-passes debug builds (DWARF embeds the bare
+# identifier) and a grep -q pipe can SIGPIPE the producer under pipefail.
+MIN_WHISPER="1.8.5"
+if [[ "$TRANSCRIBE_MODE" == "server" && "${DICTATE_SKIP_VERSION_CHECK:-0}" != "1" ]]; then
+  if [[ "$WHISPER_SERVER" == "$(brew --prefix)"* ]]; then
+    ver="$(brew list --versions whisper-cpp 2>/dev/null | awk '{print $2}' || true)"
+    [[ -n "$ver" ]] || die "cannot determine the whisper-cpp version from Homebrew"
+    if [[ "$(printf '%s\n%s\n' "$MIN_WHISPER" "$ver" | sort -V | head -1)" != "$MIN_WHISPER" ]]; then
+      die "whisper-cpp $ver is too old (need >= $MIN_WHISPER for the per-request
+token_timestamps field). Upgrade:  brew upgrade whisper-cpp   then re-run ./setup.sh"
+    fi
+  else
+    die "whisper-server at $WHISPER_SERVER is not Homebrew-managed, so its version
+(need >= $MIN_WHISPER) cannot be verified. Install via Homebrew — or, if you have
+verified your own build, re-run with:  DICTATE_SKIP_VERSION_CHECK=1 ./setup.sh"
+  fi
 fi
 
 # ---------------------------------------------------------------- 3. Models

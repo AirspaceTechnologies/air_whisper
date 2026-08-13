@@ -10,7 +10,7 @@ Hold a key, talk, release — the transcript lands at your cursor in whatever ap
 git clone git@github.com:AirspaceTechnologies/air_whisper.git && cd air_whisper && ./setup.sh
 ```
 
-Add `--with-medium` to also download the larger `medium.en` model (~1.5 GB). Requires **whisper-cpp ≥ 1.8.5** — setup.sh verifies the installed binary and tells you to `brew upgrade whisper-cpp` if it's older.
+Add `--with-medium` to also download the larger `medium.en` model (~1.5 GB). Requires **whisper-cpp ≥ 1.8.5** — setup.sh checks Homebrew's installed version and tells you to `brew upgrade whisper-cpp` if it's older. Self-built (non-Homebrew) binaries can't be version-verified; if you've verified yours, run `DICTATE_SKIP_VERSION_CHECK=1 ./setup.sh`.
 
 **Note for existing Hammerspoon users:** setup appends `require("dictate")` to your `init.lua` without touching the rest. dictate.lua does not take ownership of any Hammerspoon singleton: device hot-plug is detected by a cheap 2-second signature poll (your `hs.audiodevice.watcher` handler, if any, is untouched), and an existing `hs.shutdownCallback` is preserved and chained.
 
@@ -50,7 +50,7 @@ Click the **🎤 menu bar icon**:
 
 The pill names the mic on every recording, so a wrong pairing is immediately visible; the decision path is also logged to `~/.dictate/log.txt`.
 
-**Known limitation:** the "(1)/(2)" numbering of identical mics reflects enumeration order, which macOS does not guarantee stable across reboots or re-plugs (and exposes no identity ffmpeg can see). Calibration therefore records the mics' hardware UIDs, and the tool alerts you to **re-run `./calibrate.sh`** if it detects the twins re-enumerated differently. Recalibration takes under a minute.
+**Known limitation:** the "(1)/(2)" numbering of identical mics reflects enumeration order, which macOS does not guarantee stable across reboots or re-plugs (and exposes no identity ffmpeg can see). Calibration records the mics' hardware UIDs and the tool alerts you to **re-run `./calibrate.sh`** if a twin is ever *replaced* (different hardware). What it *cannot* detect is the same two mics swapping enumeration positions — no macOS API this tool can use exposes that. If dictation ever seems to pick up from the wrong display, don't debug it: just re-run `./calibrate.sh` — it re-measures physical reality in under a minute.
 
 ## Changing things
 

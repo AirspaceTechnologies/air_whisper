@@ -123,33 +123,61 @@ local function deviceSignature()
   return table.concat(ids, "|")
 end
 -- Ordinal labels "(1)/(2)" reflect enumeration order, not physical identity,
--- and ffmpeg exposes no UIDs to resolve against (CoreAudio and AVFoundation
--- demonstrably order devices differently) — so calibrate.sh stores the
--- duplicate group's CoreAudio UID order and we DETECT drift instead of
--- silently recording from the wrong twin. Recovery: re-run calibrate.sh.
+-- and no cross-API identity exists (ffmpeg exposes no UIDs; CoreAudio and
+-- AVFoundation demonstrably order devices differently). What IS observable is
+-- the twin group's UID SET, so we detect a twin being REPLACED (sorted-set
+-- compare: no false alerts from meaningless order changes). An order flip
+-- among the same physical twins is provably undetectable in this stack —
+-- calibration is the only ground truth, and the README says so.
 local warnedCalibration = false
+
+local function sortedUidSet(s)
+  local t = {}
+  for u in s:gmatch("[^|]+") do t[#t + 1] = u end
+  table.sort(t)
+  return table.concat(t, "|")
+end
+
+-- The twin group under protection is the one the screen map was calibrated
+-- for — derived from its labels ("Studio Display Microphone (2)" → base name)
+-- rather than "any duplicated name", which would be nondeterministic if two
+-- different duplicate groups ever coexist.
+local function calibratedGroupName()
+  for _, label in pairs(screenMap) do
+    return (label:gsub("%s%(%d+%)$", ""))
+  end
+  return nil
+end
+
+local function currentTwinUidSet()
+  local want = calibratedGroupName()
+  if not want then return nil end
+  local uids = {}
+  for _, d in ipairs(hs.audiodevice.allInputDevices()) do
+    if (d:name() or "?") == want then uids[#uids + 1] = d:uid() or "?" end
+  end
+  if #uids < 2 then return nil end -- twins absent right now (asleep/unplugged)
+  table.sort(uids)
+  return table.concat(uids, "|")
+end
+
 local function checkCalibrationIdentity()
   if warnedCalibration or micMode ~= "auto" or next(screenMap) == nil then return end
+  local current = currentTwinUidSet()
+  if not current then return end
   local stored = hs.settings.get("dictate.calibration_uids")
-  if not stored or stored == "" then return end -- calibrated before UID tracking
-  local byName = {}
-  for _, d in ipairs(hs.audiodevice.allInputDevices()) do
-    local n = d:name() or "?"
-    byName[n] = byName[n] or {}
-    table.insert(byName[n], d:uid() or "?")
+  if not stored or stored == "" then
+    -- calibration predates UID tracking; the user has validated the current
+    -- pairing by living with it, so adopt the present set as the baseline
+    hs.settings.set("dictate.calibration_uids", current)
+    log("calibration baseline captured retroactively: " .. current)
+    return
   end
-  for _, uids in pairs(byName) do
-    if #uids >= 2 then -- the duplicated group calibrate.sh measured
-      local current = table.concat(uids, "|")
-      if current ~= stored then
-        warnedCalibration = true
-        hs.alert.show("Dictation: display mics changed since calibration — re-run calibrate.sh")
-        log("calibration identity mismatch: stored=" .. stored .. " current=" .. current)
-      end
-      return
-    end
+  if current ~= sortedUidSet(stored) then
+    warnedCalibration = true
+    hs.alert.show("Dictation: display mics changed since calibration — re-run calibrate.sh")
+    log("calibration identity mismatch: stored=" .. stored .. " current=" .. current)
   end
-  -- duplicates absent right now (displays asleep/unplugged): nothing to compare
 end
 
 local deviceWatch = hs.timer.doEvery(2, function()
