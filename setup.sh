@@ -115,7 +115,9 @@ touch "$HS_DIR/init.lua"
 # A config without a trailing newline would swallow an appended require into
 # its last line's comment (silently — the file still parses), and a plain grep
 # counts commented-out requires as installed. Guard both.
-if [[ -s "$HS_DIR/init.lua" && "$(tail -c 1 "$HS_DIR/init.lua")" != $'\n' ]]; then
+# -n test, not != newline: command substitution strips trailing newlines, so
+# $(tail -c 1) is EMPTY for a newline-terminated file (and non-empty otherwise)
+if [[ -s "$HS_DIR/init.lua" && -n "$(tail -c 1 "$HS_DIR/init.lua")" ]]; then
   printf '\n' >> "$HS_DIR/init.lua"
 fi
 add_require() {
