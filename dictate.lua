@@ -188,6 +188,11 @@ local function setState(s)
   end
 end
 
+-- forward declaration: safely() must be able to kill a live recorder, but
+-- recTask is assigned in the recording section further down; without this
+-- the reference inside safely would silently resolve to a nil global
+local recTask
+
 -- Wrap tap/task callbacks so a Lua error logs and resets to idle instead of
 -- freezing the pipeline mid-state (a frozen "Listening…" pill is worse than a
 -- dropped dictation).
@@ -197,6 +202,14 @@ local function safely(fn, where)
     if ok then return ret end
     log("LUA ERROR in " .. where .. ": " .. tostring(ret))
     hs.alert.show("Dictation error — see log")
+    -- kill a live recorder BEFORE resetting state: setState("idle") disarms
+    -- the stuck guard, and an orphaned ffmpeg would record to the -t cap and
+    -- then paste minutes of ambient audio into whatever has focus
+    pcall(function()
+      if recTask and recTask:isRunning() then
+        hs.execute("/bin/kill -9 " .. tostring(recTask:pid()))
+      end
+    end)
     pcall(os.remove, WAV)
     pcall(setState, "idle")
     return false
@@ -283,13 +296,43 @@ end
 -- ---------------------------------------------------------------- whisper-server
 
 local serverTask = nil
+local serverReady = false -- set by probeServer once the HTTP endpoint answers
+
+-- The server prints "listening at" to stdout, but stdout is FULLY BUFFERED
+-- into a pipe (verified: 0 bytes arrive for 24s), so readiness can't be read
+-- from the stream — poll the HTTP endpoint instead.
+local function probeServer(attempt)
+  local t = hs.task.new("/usr/bin/curl", function(code, out)
+    if code == 0 and out == "200" then
+      serverReady = true
+      log("whisper-server ready")
+    elseif attempt < 20 and serverTask and serverTask:isRunning() then
+      hs.timer.doAfter(0.5, function() probeServer(attempt + 1) end)
+    else
+      log("whisper-server never became ready")
+    end
+  end, { "-s", "-o", "/dev/null", "-w", "%{http_code}", "--max-time", "2",
+         string.format("http://127.0.0.1:%d/", config.server_port) })
+  if not t:start() then log("readiness probe failed to launch") end
+end
 
 local function startServer()
   if serverTask and serverTask:isRunning() then return end
   -- Clear any orphan from a previous Hammerspoon crash holding our port.
   hs.execute(string.format([[/usr/bin/pkill -f "whisper-server.*--port %d"]], config.server_port))
+  serverReady = false
   serverTask = hs.task.new(config.server_bin, function(code, _, err)
+    serverReady = false
     if code ~= 0 then log("whisper-server exited " .. tostring(code) .. ": " .. (err or "")) end
+  end, function(_, _, stderr)
+    -- draining is load-bearing: hs.task only reads a long-lived task's output
+    -- when a streaming callback is set — without one the 64KiB stderr pipe
+    -- fills after ~170 requests and the server write-blocks forever.
+    -- stderr (unlike stdout) arrives promptly, so bind failures surface here.
+    if stderr and stderr:find("couldn't bind", 1, true) then
+      hs.alert.show("Dictation: port " .. config.server_port .. " is in use — dictation disabled")
+    end
+    return true -- keep streaming
   end, {
     "-m", config.model_path,
     "--host", "127.0.0.1",
@@ -299,6 +342,7 @@ local function startServer()
   })
   if serverTask:start() then
     log("whisper-server started on port " .. config.server_port)
+    probeServer(1)
   else
     serverTask = nil
     log("whisper-server failed to launch: " .. tostring(config.server_bin))
@@ -354,8 +398,14 @@ local function insertText(text)
     return
   end
   local saved = hs.pasteboard.readAllData(nil)
-  hs.pasteboard.setContents(text)
-  hs.eventtap.keyStroke({ "cmd" }, "v", 30000)
+  if hs.pasteboard.setContents(text) then
+    hs.eventtap.keyStroke({ "cmd" }, "v", 30000)
+  else
+    -- a clipboard manager can steal pasteboard ownership mid-write; pasting
+    -- then would insert the user's OLD clipboard — type the text instead
+    log("pasteboard setContents failed (ownership changed) — typing instead")
+    hs.eventtap.keyStrokes(text)
+  end
   -- restore the previous pasteboard (all types, so images survive) even on error
   hs.timer.doAfter(config.restore_delay_ms / 1000, function()
     pcall(function()
@@ -407,12 +457,25 @@ end
 transcribe = function(wav, isRetry)
   setState("transcribing")
   if config.transcribe_mode == "cli" then return transcribeCli(wav) end
+  -- fail closed: never upload audio unless OUR server is alive and confirmed
+  -- bound — whisper-server sets SO_REUSEPORT, so a squatter on the port can
+  -- otherwise receive the recording and have its response pasted
+  if not (serverTask and serverTask:isRunning() and serverReady) then
+    if isRetry then
+      return failRun("transcription server unavailable",
+                     "still starting, or port " .. config.server_port .. " is in use")
+    end
+    log("server not ready, restarting and retrying")
+    startServer()
+    return hs.timer.doAfter(2.5, function() transcribe(wav, true) end)
+  end
   local t = hs.task.new("/usr/bin/curl", safely(function(code, out, err)
     if code == 0 then
       handleTranscript(out)
-    elseif code == 7 and not isRetry then
-      -- connection refused: server died or still warming up — restart, retry once
-      log("server unreachable, restarting and retrying")
+    elseif (code == 7 or code == 28) and not isRetry then
+      -- 7: connection refused (server died / warming up). 28: timeout — a
+      -- wedged server keeps its port LISTENing so refused can never fire.
+      log("server unreachable (curl exit " .. tostring(code) .. "), restarting and retrying")
       startServer()
       hs.timer.doAfter(1.5, function() transcribe(wav, true) end)
     else
@@ -437,7 +500,7 @@ end
 
 -- ---------------------------------------------------------------- recording
 
-local recTask = nil
+recTask = nil -- declared above safely(), which kills it on error recovery
 local holdStart = 0
 local canceled = false
 local watchdog = nil
@@ -573,9 +636,11 @@ flagsTap = hs.eventtap.new({ hs.eventtap.event.types.flagsChanged }, safely(func
 end, "flags-tap"))
 
 -- Any regular key while PTT is held (fn+arrows, fn+delete, ...) cancels the
--- recording and passes through untouched.
+-- recording and passes through untouched. The pttDown gate matters: state
+-- stays "recording" for ~30ms after key-up (until ffmpeg's exit callback), and
+-- a keystroke in that window must not discard the finished dictation.
 local keyTap = hs.eventtap.new({ hs.eventtap.event.types.keyDown }, safely(function(e)
-  if state == "recording" then cancelRecording() end
+  if state == "recording" and pttDown then cancelRecording() end
   return false
 end, "key-tap"))
 
@@ -604,6 +669,12 @@ end)
 hs.execute('/usr/bin/pkill -9 -f "' .. WAV .. '"')
 os.remove(WAV) -- clear any leftover audio from a crash
 refreshDevices()
+-- hs.audiodevice.watcher is a singleton with no callback getter, so composing
+-- with an existing handler is impossible — at least make the takeover loud
+if hs.audiodevice.watcher.isRunning() then
+  log("WARNING: hs.audiodevice.watcher already active — dictate.lua is replacing its callback")
+  hs.alert.show("Dictation: replaced an existing hs.audiodevice.watcher callback")
+end
 hs.audiodevice.watcher.setCallback(function(event)
   if event == "dev#" then refreshDevices() end -- device list changed
 end)
@@ -613,6 +684,7 @@ menubar:setMenu(buildMenu)
 flagsTap:start()
 keyTap:start()
 setState("idle")
+local priorShutdown = hs.shutdownCallback -- chain another module's handler, don't clobber it
 hs.shutdownCallback = function()
   -- runs on quit AND on config reload: never abandon a live recorder — after
   -- a reload nothing drains its stderr pipe and no Lua state can reach it
@@ -622,7 +694,8 @@ hs.shutdownCallback = function()
     end
   end)
   pcall(os.remove, WAV)
-  stopServer()
+  pcall(stopServer)
+  if type(priorShutdown) == "function" then pcall(priorShutdown) end
 end
 log("dictate.lua loaded; hotkey=" .. config.hotkey .. "; mic_mode=" .. micMode)
 hs.alert.show("Dictation ready — hold " .. config.hotkey .. " to talk")
@@ -635,6 +708,7 @@ return {
   menubar = menubar,
   stuckGuard = stuckGuard,
   debug = function()
-    return hs.inspect({ mode = micMode, fixed = fixedLabel, map = screenMap, devices = deviceCache })
+    return hs.inspect({ mode = micMode, fixed = fixedLabel, map = screenMap,
+                        state = state, serverReady = serverReady, devices = deviceCache })
   end,
 }

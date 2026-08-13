@@ -7,10 +7,12 @@ Hold a key, talk, release — the transcript lands at your cursor in whatever ap
 ## Install
 
 ```
-git clone <repo-url> && cd air_whisper && ./setup.sh
+git clone git@github.com:AirspaceTechnologies/air_whisper.git && cd air_whisper && ./setup.sh
 ```
 
 Add `--with-medium` to also download the larger `medium.en` model (~1.5 GB).
+
+**Note for existing Hammerspoon users:** setup appends `require("dictate")` to your `init.lua` without touching the rest. dictate.lua takes ownership of `hs.audiodevice.watcher` (macOS Hammerspoon provides no way to chain its callback — you'll get a warning if yours was active; merge your handler into dictate.lua's if you need both). An existing `hs.shutdownCallback` is preserved and chained.
 
 ## Permissions (required, manual)
 

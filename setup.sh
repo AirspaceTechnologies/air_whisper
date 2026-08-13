@@ -67,12 +67,20 @@ else
   printf '\n'
   read -rp "Fallback mic NAME [MacBook Pro Microphone]: " MIC_NAME || true
   MIC_NAME="${MIC_NAME:-MacBook Pro Microphone}"
-  sed -e "s|__MIC_NAME__|$MIC_NAME|" \
-      -e "s|__SERVER_BIN__|$WHISPER_SERVER|" \
-      -e "s|__CLI_BIN__|$WHISPER_CLI|" \
-      -e "s|__FFMPEG_BIN__|$FFMPEG_BIN|" \
-      -e "s|__TRANSCRIBE_MODE__|$TRANSCRIBE_MODE|" \
-      "$REPO_DIR/config.template.lua" > "$DICTATE_DIR/config.lua"
+  # bash literal substitution, NOT sed: a mic name containing & | \ or "
+  # corrupted the config via sed metacharacters — or truncated it to 0 bytes
+  # when sed failed after the redirect had already emptied the file. Only Lua
+  # string escaping remains, and temp-then-move keeps failures non-destructive.
+  mic_lua=${MIC_NAME//\\/\\\\}
+  mic_lua=${mic_lua//\"/\\\"}
+  t=$(<"$REPO_DIR/config.template.lua")
+  t=${t//__MIC_NAME__/$mic_lua}
+  t=${t//__SERVER_BIN__/$WHISPER_SERVER}
+  t=${t//__CLI_BIN__/$WHISPER_CLI}
+  t=${t//__FFMPEG_BIN__/$FFMPEG_BIN}
+  t=${t//__TRANSCRIBE_MODE__/$TRANSCRIBE_MODE}
+  printf '%s\n' "$t" > "$DICTATE_DIR/config.lua.tmp"
+  mv "$DICTATE_DIR/config.lua.tmp" "$DICTATE_DIR/config.lua"
   echo "Wrote $DICTATE_DIR/config.lua"
 fi
 
