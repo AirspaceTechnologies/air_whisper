@@ -8,7 +8,7 @@ return {
   transcribe_mode   = "__TRANSCRIBE_MODE__", -- "server" (persistent, fast) or "cli" (fallback)
   server_bin        = "__SERVER_BIN__",
   cli_bin           = "__CLI_BIN__",
-  server_port       = 12800,
+  server_port       = 12800,         -- base; the server binds base+1..99, re-picked per launch
   ffmpeg_bin        = "__FFMPEG_BIN__",
   mic_mode          = "auto",         -- "auto" (follow focused screen) or "fixed"
   audio_device      = { name = "__MIC_NAME__" },   -- fallback mic, matched by name

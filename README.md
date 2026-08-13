@@ -12,7 +12,7 @@ git clone git@github.com:AirspaceTechnologies/air_whisper.git && cd air_whisper 
 
 Add `--with-medium` to also download the larger `medium.en` model (~1.5 GB).
 
-**Note for existing Hammerspoon users:** setup appends `require("dictate")` to your `init.lua` without touching the rest. dictate.lua takes ownership of `hs.audiodevice.watcher` (macOS Hammerspoon provides no way to chain its callback — you'll get a warning if yours was active; merge your handler into dictate.lua's if you need both). An existing `hs.shutdownCallback` is preserved and chained.
+**Note for existing Hammerspoon users:** setup appends `require("dictate")` to your `init.lua` without touching the rest. dictate.lua does not take ownership of any Hammerspoon singleton: device hot-plug is detected by a cheap 2-second signature poll (your `hs.audiodevice.watcher` handler, if any, is untouched), and an existing `hs.shutdownCallback` is preserved and chained.
 
 ## Permissions (required, manual)
 

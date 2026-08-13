@@ -7,7 +7,6 @@
 local config = dofile(os.getenv("HOME") .. "/.dictate/config.lua")
 
 local WAV = os.getenv("HOME") .. "/.dictate/tmp/rec.wav"
-local SERVER_URL = string.format("http://127.0.0.1:%d/inference", config.server_port)
 
 -- flagsChanged keycodes for modifier keys usable alone as push-to-talk.
 -- This table is the full set of supported hotkeys.
@@ -92,6 +91,28 @@ local function refreshDevices()
   end, { "-hide_banner", "-f", "avfoundation", "-list_devices", "true", "-i", "" })
   if not t:start() then enumerating = false end -- else a failed launch blocks refreshes forever
 end
+
+-- Device hot-plug detection WITHOUT owning the hs.audiodevice.watcher
+-- singleton (setting its callback destroys any handler an existing config
+-- registered — undetectably when theirs was set but not started). Poll a
+-- cheap CoreAudio device signature (~0.04ms) and run the real ffmpeg
+-- enumeration only when it changes.
+local deviceSig = ""
+local function deviceSignature()
+  local ids = {}
+  for _, d in ipairs(hs.audiodevice.allInputDevices()) do
+    ids[#ids + 1] = d:uid() or d:name()
+  end
+  table.sort(ids)
+  return table.concat(ids, "|")
+end
+local deviceWatch = hs.timer.doEvery(2, function()
+  local sig = deviceSignature()
+  if sig ~= deviceSig then
+    deviceSig = sig
+    refreshDevices()
+  end
+end)
 
 local function findByLabel(label)
   for _, d in ipairs(deviceCache) do if d.label == label then return d end end
@@ -296,32 +317,92 @@ end
 -- ---------------------------------------------------------------- whisper-server
 
 local serverTask = nil
-local serverReady = false -- set by probeServer once the HTTP endpoint answers
+local serverReady = false -- set only after the HTTP probe AND ownership check pass
+local serverPort = config.server_port -- actual bound port; re-picked per launch
+local portRerolls = 0
+
+local function serverUrl(path)
+  return string.format("http://127.0.0.1:%d%s", serverPort, path)
+end
+
+local startServer -- forward declaration (restartServer/verifyOwnership recurse into it)
+
+-- A dead or hung server must be REPLACED, not re-entered: startServer's
+-- early-return sees a hung server as running, and isRunning() reads a stale
+-- true ~60% of the time right after a kill — so drop the handle entirely.
+local function restartServer()
+  serverReady = false
+  if serverTask then
+    local pid = serverTask:pid()
+    -- the pid > 0 guard is critical: pid() returns 0 for a never-started
+    -- task, and "kill -9 0" would SIGKILL Hammerspoon's whole process group
+    if serverTask:isRunning() and pid and pid > 0 then
+      hs.execute("/bin/kill -9 " .. tostring(pid)) -- hung servers ignore SIGTERM
+    end
+    serverTask = nil -- orphan the handle; its callbacks identity-check and no-op
+  end
+  startServer()
+end
+
+-- Readiness is proven in two identity-guarded steps: (1) the HTTP endpoint
+-- answers, (2) lsof shows OUR pid as the port's only listener. The second
+-- step matters because whisper-server sets SO_REUSEPORT: a rival server can
+-- share the port, answer the probe, and receive the audio (verified — the
+-- last binder takes all new connections).
+local function verifyOwnership(owner)
+  local t = hs.task.new("/usr/sbin/lsof", function(_, out)
+    if serverTask ~= owner then return end -- stale chain from a replaced server
+    local pids = {}
+    for p in (out or ""):gmatch("p(%d+)") do pids[#pids + 1] = tonumber(p) end
+    if #pids == 1 and pids[1] == owner:pid() then
+      portRerolls = 0
+      serverReady = true
+      log(string.format("whisper-server ready on port %d (pid %d)", serverPort, pids[1]))
+    elseif portRerolls < 3 then
+      portRerolls = portRerolls + 1
+      log(string.format("port %d ownership check failed (%d listeners) — re-rolling port",
+                        serverPort, #pids))
+      restartServer()
+    else
+      hs.alert.show("Dictation: no usable server port — dictation disabled")
+      log("giving up after " .. portRerolls .. " port re-rolls")
+    end
+  end, { "-nP", "-iTCP:" .. serverPort, "-sTCP:LISTEN", "-Fp" })
+  if not t:start() then log("ownership check failed to launch") end
+end
 
 -- The server prints "listening at" to stdout, but stdout is FULLY BUFFERED
 -- into a pipe (verified: 0 bytes arrive for 24s), so readiness can't be read
--- from the stream — poll the HTTP endpoint instead.
-local function probeServer(attempt)
+-- from the stream — poll the HTTP endpoint until a wall-clock deadline
+-- (cold starts have taken 7+s for Metal shader compilation).
+local function probeServer(owner, deadline)
+  if serverTask ~= owner or not owner:isRunning() then return end
   local t = hs.task.new("/usr/bin/curl", function(code, out)
+    if serverTask ~= owner then return end
     if code == 0 and out == "200" then
-      serverReady = true
-      log("whisper-server ready")
-    elseif attempt < 20 and serverTask and serverTask:isRunning() then
-      hs.timer.doAfter(0.5, function() probeServer(attempt + 1) end)
+      verifyOwnership(owner)
+    elseif hs.timer.secondsSinceEpoch() < deadline then
+      hs.timer.doAfter(0.5, function() probeServer(owner, deadline) end)
     else
-      log("whisper-server never became ready")
+      log("whisper-server never became ready on port " .. serverPort)
     end
   end, { "-s", "-o", "/dev/null", "-w", "%{http_code}", "--max-time", "2",
-         string.format("http://127.0.0.1:%d/", config.server_port) })
+         serverUrl("/") })
   if not t:start() then log("readiness probe failed to launch") end
 end
 
-local function startServer()
+startServer = function()
   if serverTask and serverTask:isRunning() then return end
-  -- Clear any orphan from a previous Hammerspoon crash holding our port.
-  hs.execute(string.format([[/usr/bin/pkill -f "whisper-server.*--port %d"]], config.server_port))
+  -- SIGKILL orphans of OURS from a crash — matched by our model directory,
+  -- any port, since ports are per-launch; write-blocked orphans ignore milder
+  hs.execute([[/usr/bin/pkill -9 -f "whisper-server.*[.]dictate.*--port"]])
   serverReady = false
-  serverTask = hs.task.new(config.server_bin, function(code, _, err)
+  -- fresh random port per launch: makes accidentally sharing a port with
+  -- another whisper-server (SO_REUSEPORT) improbable instead of silent
+  serverPort = config.server_port + math.random(1, 99)
+  local thisTask -- declared BEFORE assignment so the callbacks capture THIS name
+  thisTask = hs.task.new(config.server_bin, function(code, _, err)
+    if serverTask ~= thisTask then return end -- stale callback from a replaced server
     serverReady = false
     if code ~= 0 then log("whisper-server exited " .. tostring(code) .. ": " .. (err or "")) end
   end, function(_, _, stderr)
@@ -330,19 +411,21 @@ local function startServer()
     -- fills after ~170 requests and the server write-blocks forever.
     -- stderr (unlike stdout) arrives promptly, so bind failures surface here.
     if stderr and stderr:find("couldn't bind", 1, true) then
-      hs.alert.show("Dictation: port " .. config.server_port .. " is in use — dictation disabled")
+      hs.alert.show("Dictation: server couldn't bind port " .. serverPort
+                    .. " — will pick another on the next dictation")
     end
     return true -- keep streaming
   end, {
     "-m", config.model_path,
     "--host", "127.0.0.1",
-    "--port", tostring(config.server_port),
+    "--port", tostring(serverPort),
     "-t", "4",
     "-sns", -- suppress non-speech tokens
   })
-  if serverTask:start() then
-    log("whisper-server started on port " .. config.server_port)
-    probeServer(1)
+  serverTask = thisTask
+  if thisTask:start() then
+    log("whisper-server started on port " .. serverPort)
+    probeServer(thisTask, hs.timer.secondsSinceEpoch() + 20)
   else
     serverTask = nil
     log("whisper-server failed to launch: " .. tostring(config.server_bin))
@@ -350,7 +433,14 @@ local function startServer()
 end
 
 local function stopServer()
-  if serverTask and serverTask:isRunning() then serverTask:terminate() end
+  if serverTask and serverTask:isRunning() then
+    local pid = serverTask:pid()
+    if pid and pid > 0 then
+      hs.execute("/bin/kill -9 " .. tostring(pid)) -- a hung server ignores SIGTERM
+    else
+      serverTask:terminate()
+    end
+  end
 end
 
 -- ---------------------------------------------------------------- text cleanup
@@ -399,25 +489,29 @@ local function insertText(text)
   end
   local saved = hs.pasteboard.readAllData(nil)
   if hs.pasteboard.setContents(text) then
+    local ours = hs.pasteboard.changeCount()
     hs.eventtap.keyStroke({ "cmd" }, "v", 30000)
+    -- restore the previous pasteboard (all types, so images survive) — but
+    -- only while it still holds OUR transcript: if anything copied since
+    -- (changeCount moved), restoring would destroy that newer value
+    hs.timer.doAfter(config.restore_delay_ms / 1000, function()
+      pcall(function()
+        if hs.pasteboard.changeCount() ~= ours then return end
+        if saved and next(saved) ~= nil then
+          hs.pasteboard.writeAllData(nil, saved)
+        else
+          -- clipboard was empty before (readAllData returns {}): clear it
+          -- rather than leaving the transcript behind
+          hs.pasteboard.clearContents()
+        end
+      end)
+    end)
   else
-    -- a clipboard manager can steal pasteboard ownership mid-write; pasting
-    -- then would insert the user's OLD clipboard — type the text instead
+    -- another owner took the pasteboard mid-write: their value is NEWER than
+    -- our saved copy — type the text and leave the clipboard alone entirely
     log("pasteboard setContents failed (ownership changed) — typing instead")
     hs.eventtap.keyStrokes(text)
   end
-  -- restore the previous pasteboard (all types, so images survive) even on error
-  hs.timer.doAfter(config.restore_delay_ms / 1000, function()
-    pcall(function()
-      if saved and next(saved) ~= nil then
-        hs.pasteboard.writeAllData(nil, saved)
-      else
-        -- clipboard was empty before (readAllData returns {}): clear it
-        -- rather than leaving the transcript behind
-        hs.pasteboard.clearContents()
-      end
-    end)
-  end)
 end
 
 -- ---------------------------------------------------------------- transcription
@@ -445,6 +539,20 @@ end
 
 local transcribe -- forward declaration (retry recursion)
 
+-- Wait (bounded) for the server to become ready before uploading — a single
+-- fixed-delay retry loses to slow cold starts; this covers them up to the
+-- deadline and then fails closed.
+local function waitForReady(wav, deadline)
+  if serverReady and serverTask and serverTask:isRunning() then
+    return transcribe(wav, true)
+  end
+  if hs.timer.secondsSinceEpoch() >= deadline then
+    return failRun("transcription server unavailable",
+                   "not ready on port " .. serverPort)
+  end
+  hs.timer.doAfter(0.5, function() waitForReady(wav, deadline) end)
+end
+
 local function transcribeCli(wav)
   local t = hs.task.new(config.cli_bin, safely(function(code, out, err)
     if code == 0 then handleTranscript(out)
@@ -458,26 +566,33 @@ transcribe = function(wav, isRetry)
   setState("transcribing")
   if config.transcribe_mode == "cli" then return transcribeCli(wav) end
   -- fail closed: never upload audio unless OUR server is alive and confirmed
-  -- bound — whisper-server sets SO_REUSEPORT, so a squatter on the port can
-  -- otherwise receive the recording and have its response pasted
+  -- the sole owner of its port — whisper-server sets SO_REUSEPORT, so a rival
+  -- server can otherwise receive the recording and have its response pasted
   if not (serverTask and serverTask:isRunning() and serverReady) then
     if isRetry then
       return failRun("transcription server unavailable",
-                     "still starting, or port " .. config.server_port .. " is in use")
+                     "port " .. serverPort .. " not ready")
     end
-    log("server not ready, restarting and retrying")
-    startServer()
-    return hs.timer.doAfter(2.5, function() transcribe(wav, true) end)
+    portRerolls = 0 -- fresh re-roll budget for this attempt
+    if serverTask and serverTask:isRunning() then
+      -- still starting: re-kick the (possibly expired) probe chain, don't kill it
+      probeServer(serverTask, hs.timer.secondsSinceEpoch() + 15)
+    else
+      startServer()
+    end
+    return waitForReady(wav, hs.timer.secondsSinceEpoch() + 15)
   end
   local t = hs.task.new("/usr/bin/curl", safely(function(code, out, err)
     if code == 0 then
       handleTranscript(out)
     elseif (code == 7 or code == 28) and not isRetry then
-      -- 7: connection refused (server died / warming up). 28: timeout — a
-      -- wedged server keeps its port LISTENing so refused can never fire.
-      log("server unreachable (curl exit " .. tostring(code) .. "), restarting and retrying")
-      startServer()
-      hs.timer.doAfter(1.5, function() transcribe(wav, true) end)
+      -- 7: connection refused (server died). 28: timeout — a hung server
+      -- keeps its port LISTENing so refused can never fire. Either way the
+      -- old process is useless: force-replace it (plain startServer would
+      -- no-op on a still-running-but-hung task).
+      log("server unreachable (curl exit " .. tostring(code) .. "), force-restarting")
+      restartServer()
+      waitForReady(wav, hs.timer.secondsSinceEpoch() + 15)
     else
       -- with --fail-with-body the server's error body arrives on stdout
       failRun("transcription failed (curl exit " .. tostring(code) .. ")",
@@ -489,7 +604,7 @@ transcribe = function(wav, isRetry)
          -- token_timestamps=false: server default since v1.8.4 wraps segments at
          -- 60 chars on TOKEN boundaries, splitting words (whisper.cpp #3968);
          -- note max_len=0 is NOT a fix — the server maps 0 back to 60.
-         "-s", "--fail-with-body", "--max-time", "30", SERVER_URL,
+         "-s", "--fail-with-body", "--max-time", "30", serverUrl("/inference"),
          "-F", "file=@" .. wav,
          "-F", "response_format=text",
          "-F", "token_timestamps=false",
@@ -669,16 +784,7 @@ end)
 hs.execute('/usr/bin/pkill -9 -f "' .. WAV .. '"')
 os.remove(WAV) -- clear any leftover audio from a crash
 refreshDevices()
--- hs.audiodevice.watcher is a singleton with no callback getter, so composing
--- with an existing handler is impossible — at least make the takeover loud
-if hs.audiodevice.watcher.isRunning() then
-  log("WARNING: hs.audiodevice.watcher already active — dictate.lua is replacing its callback")
-  hs.alert.show("Dictation: replaced an existing hs.audiodevice.watcher callback")
-end
-hs.audiodevice.watcher.setCallback(function(event)
-  if event == "dev#" then refreshDevices() end -- device list changed
-end)
-hs.audiodevice.watcher.start()
+deviceSig = deviceSignature() -- baseline so the poll doesn't fire a redundant refresh
 startServer()
 menubar:setMenu(buildMenu)
 flagsTap:start()
@@ -707,8 +813,10 @@ return {
   keyTap = keyTap,
   menubar = menubar,
   stuckGuard = stuckGuard,
+  deviceWatch = deviceWatch,
   debug = function()
     return hs.inspect({ mode = micMode, fixed = fixedLabel, map = screenMap,
-                        state = state, serverReady = serverReady, devices = deviceCache })
+                        state = state, serverReady = serverReady,
+                        serverPort = serverPort, devices = deviceCache })
   end,
 }
