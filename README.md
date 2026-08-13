@@ -91,7 +91,7 @@ Tip: enable **"Launch Hammerspoon at login"** in Hammerspoon's preferences so th
 
 - Audio is written to `~/.dictate/tmp/rec.wav` and **deleted after every dictation**, success or failure; leftovers are cleared on load.
 - The log (`~/.dictate/log.txt`) records device names and errors — **never transcripts, never audio**.
-- Transcription happens in a local `whisper-server` bound to `127.0.0.1` (loopback never leaves the machine). The only true network access is `setup.sh` downloading models from Hugging Face, once.
+- Transcription happens in a local `whisper-server` bound to `127.0.0.1` (loopback never leaves the machine). The upload is invoked proxy-immune (`curl -q --noproxy "*"`), so proxy environment variables or a `~/.curlrc` cannot reroute audio through a proxy. The only true network access is `setup.sh` downloading models from Hugging Face, once (that download *does* honor your proxy, deliberately — it's public content you may need a proxy to reach).
 - The model stays resident in RAM (~600 MB for small.en) while Hammerspoon runs — that's the price of ~0.5 s transcriptions.
 - No accounts, no telemetry, no cloud.
 

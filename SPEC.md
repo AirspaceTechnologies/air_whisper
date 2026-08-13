@@ -80,7 +80,7 @@ whisper-server -m ~/.dictate/models/ggml-small.en.bin --host 127.0.0.1 --port <p
 Request on key-up (transcript is the response body; `--fail-with-body` keeps HTTP error bodies out of the paste path, `token_timestamps=false` avoids the 60-char token-boundary wrapping regression, whisper.cpp #3968):
 
 ```
-curl -s --fail-with-body --max-time 30 http://127.0.0.1:<port>/inference -F file=@$HOME/.dictate/tmp/rec.wav -F response_format=text -F token_timestamps=false -F language=en -F temperature=0.0
+curl -q -s --noproxy "*" --fail-with-body --max-time 30 http://127.0.0.1:<port>/inference -F file=@$HOME/.dictate/tmp/rec.wav -F response_format=text -F token_timestamps=false -F language=en -F temperature=0.0
 ```
 
 Lifecycle rules:

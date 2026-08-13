@@ -452,7 +452,8 @@ local function probeServer(owner, deadline)
     else
       log("whisper-server never became ready on port " .. serverPort)
     end
-  end, { "-s", "-o", "/dev/null", "-w", "%{http_code}", "--max-time", "2",
+  end, { "-q", "-s", "--noproxy", "*", -- proxy-immune, same as the upload
+         "-o", "/dev/null", "-w", "%{http_code}", "--max-time", "2",
          serverUrl("/") })
   if not t:start() then log("readiness probe failed to launch") end
 end
@@ -662,12 +663,16 @@ transcribe = function(wav, isRetry)
               (out ~= nil and out ~= "" and out) or err)
     end
   end, "transcribe"), {
+         -- -q (MUST be first) skips ~/.curlrc and --noproxy "*" ignores proxy
+         -- env vars: curl has no loopback exemption, so either could reroute
+         -- the WAV through a proxy — verified live (privacy guarantee).
          -- --fail-with-body: HTTP >= 400 exits 22 instead of pasting the error
          -- body as a transcript; connection-refused stays exit 7 for the retry.
          -- token_timestamps=false: server default since v1.8.4 wraps segments at
          -- 60 chars on TOKEN boundaries, splitting words (whisper.cpp #3968);
          -- note max_len=0 is NOT a fix — the server maps 0 back to 60.
-         "-s", "--fail-with-body", "--max-time", "30", serverUrl("/inference"),
+         "-q", "-s", "--noproxy", "*",
+         "--fail-with-body", "--max-time", "30", serverUrl("/inference"),
          "-F", "file=@" .. wav,
          "-F", "response_format=text",
          "-F", "token_timestamps=false",

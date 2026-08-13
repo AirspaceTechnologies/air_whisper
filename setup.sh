@@ -112,8 +112,18 @@ bold "Installing Hammerspoon module…"
 mkdir -p "$HS_DIR"
 cp "$REPO_DIR/dictate.lua" "$HS_DIR/dictate.lua"
 touch "$HS_DIR/init.lua"
-grep -q 'require("hs.ipc")' "$HS_DIR/init.lua" || echo 'require("hs.ipc")' >> "$HS_DIR/init.lua"
-grep -q 'require("dictate")' "$HS_DIR/init.lua" || echo 'require("dictate")' >> "$HS_DIR/init.lua"
+# A config without a trailing newline would swallow an appended require into
+# its last line's comment (silently — the file still parses), and a plain grep
+# counts commented-out requires as installed. Guard both.
+if [[ -s "$HS_DIR/init.lua" && "$(tail -c 1 "$HS_DIR/init.lua")" != $'\n' ]]; then
+  printf '\n' >> "$HS_DIR/init.lua"
+fi
+add_require() {
+  grep -Eq "^[[:space:]]*require\(\"$1\"\)" "$HS_DIR/init.lua" \
+    || printf 'require("%s")\n' "$1" >> "$HS_DIR/init.lua"
+}
+add_require "hs.ipc"
+add_require "dictate"
 
 if pgrep -x Hammerspoon >/dev/null 2>&1; then
   if command -v hs >/dev/null 2>&1; then
