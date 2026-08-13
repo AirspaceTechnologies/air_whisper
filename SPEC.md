@@ -25,6 +25,7 @@ Mic devices are dynamic on this machine, so selection is a runtime feature, not 
   - Menu selections persist via `hs.settings` and survive reloads; `~/.dictate/config.lua` holds the hand-edited defaults, `hs.settings` holds the runtime overrides.
 - **Auto mode (the Wispr Flow behavior)**: at key-down, take the screen of the focused window (fallback: the screen containing the mouse pointer), look up its UUID in the screen→mic map, and record from that mic. Unmapped screen → fall back to the fixed selection → else avfoundation's `:default` device.
 - **Why assignment is manual**: macOS does not expose which "Studio Display Microphone" belongs to which physical display, so pairing is a one-time manual step in the menu. Screen UUIDs are stable across reboots, so it sticks. Log which device each recording used (name + index), so a wrong pairing is diagnosable from the log.
+- **Identity limitation (accepted)**: duplicate-name ordinals "(1)/(2)" are enumeration-order, not physical identity, and no UID↔avfoundation-index linkage exists in this stack (CoreAudio and AVFoundation order devices differently — verified). Calibration stores the duplicate group's CoreAudio UID order; the module alerts "re-run calibrate.sh" when that drifts rather than silently recording from the wrong twin. whisper-cpp ≥ 1.8.5 is required (setup.sh probes the binary for the per-request `token_timestamps` capability via strings(1)).
 
 ## Visual indicator
 

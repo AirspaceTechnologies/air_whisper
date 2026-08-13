@@ -36,7 +36,19 @@ WHISPER_SERVER="$(command -v whisper-server || true)"
 WHISPER_CLI="$(command -v whisper-cli || command -v whisper-cpp || true)"
 [[ -n "$WHISPER_SERVER" || -n "$WHISPER_CLI" ]] || die "whisper binaries missing after install"
 TRANSCRIBE_MODE="server"
-[[ -z "$WHISPER_SERVER" ]] && TRANSCRIBE_MODE="cli"
+if [[ -z "$WHISPER_SERVER" ]]; then TRANSCRIBE_MODE="cli"; fi
+
+# The server must honor the per-request token_timestamps field (v1.8.5+,
+# PR #3785), or long dictations hit the 60-char mid-word wrapping regression
+# introduced in v1.8.4. The field name survives compilation only as the
+# request-parsing string literal, so strings(1) is a reliable capability
+# probe — and it works for non-Homebrew builds too.
+if [[ "$TRANSCRIBE_MODE" == "server" ]] \
+   && ! strings "$WHISPER_SERVER" 2>/dev/null | grep -q token_timestamps; then
+  die "whisper-cpp is too old (< 1.8.5): whisper-server does not support the
+per-request token_timestamps field this tool depends on.
+Upgrade with:  brew upgrade whisper-cpp   then re-run ./setup.sh"
+fi
 
 # ---------------------------------------------------------------- 3. Models
 bold "Checking models…"

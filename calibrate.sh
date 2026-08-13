@@ -69,14 +69,40 @@ if awk "BEGIN{exit !($V1 > $V2)}"; then LEFT_MIC="$DUP_NAME (1)"; RIGHT_MIC="$DU
 else                                    LEFT_MIC="$DUP_NAME (2)"; RIGHT_MIC="$DUP_NAME (1)"
 fi
 
-# ---- write the map and reload ----------------------------------------------
-"$HS" -c "hs.settings.set('dictate.screen_map', {
-  [\"$LEFT_UUID\"]  = \"$LEFT_MIC\",
-  [\"$RIGHT_UUID\"] = \"$RIGHT_MIC\",
-}); hs.settings.set('dictate.mic_mode', 'auto'); hs.reload()" >/dev/null 2>&1 || true
+# ---- write the map, VERIFY it, then reload ----------------------------------
+# Device names can contain " and \ — escape them into the Lua literals. And
+# note: the hs CLI exits 0 even when the Lua errors, so exit codes prove
+# nothing here; the read-back below is the only reliable success check.
+lua_escape() { local s=${1//\\/\\\\}; printf '%s' "${s//\"/\\\"}"; }
+L_MIC=$(lua_escape "$LEFT_MIC"); R_MIC=$(lua_escape "$RIGHT_MIC")
+DUP_ESC=$(lua_escape "$DUP_NAME")
+
+# calibration-time identity: the duplicate group's CoreAudio UID order. The
+# module compares this at load/device-change and warns to recalibrate if the
+# twins ever re-enumerate differently — ordinals (1)/(2) alone are not identity.
+UIDS=$("$HS" -c "local t = {}
+for _, d in ipairs(hs.audiodevice.allInputDevices()) do
+  if d:name() == \"$DUP_ESC\" then t[#t + 1] = d:uid() or \"?\" end
+end
+print(table.concat(t, \"|\"))" 2>/dev/null | tail -1)
+
+"$HS" -c "hs.settings.set(\"dictate.screen_map\", {
+  [\"$LEFT_UUID\"]  = \"$L_MIC\",
+  [\"$RIGHT_UUID\"] = \"$R_MIC\",
+})
+hs.settings.set(\"dictate.mic_mode\", \"auto\")
+hs.settings.set(\"dictate.calibration_uids\", \"$UIDS\")" >/dev/null 2>&1 || true
+
+GOT=$("$HS" -c "local m = hs.settings.get(\"dictate.screen_map\") or {}
+print((m[\"$LEFT_UUID\"] or \"MISSING\") .. \" / \" .. (m[\"$RIGHT_UUID\"] or \"MISSING\"))" 2>/dev/null | tail -1)
+[[ "$GOT" == "$LEFT_MIC / $RIGHT_MIC" ]] \
+  || die "settings write failed — read back: $GOT"
+
+# reload last; the IPC disconnect it causes is expected and harmless
+"$HS" -c "hs.reload()" >/dev/null 2>&1 || true
 
 echo
-echo "Calibrated:"
+echo "Calibrated (write verified):"
 echo "  $LEFT_NAME (left)   → $LEFT_MIC"
 echo "  $RIGHT_NAME (right) → $RIGHT_MIC"
 echo "Auto mic mode is ON. The pill names its mic on every dictation — verify on each screen."

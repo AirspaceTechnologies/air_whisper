@@ -9,12 +9,15 @@ local config = dofile(os.getenv("HOME") .. "/.dictate/config.lua")
 local WAV = os.getenv("HOME") .. "/.dictate/tmp/rec.wav"
 
 -- flagsChanged keycodes for modifier keys usable alone as push-to-talk.
--- This table is the full set of supported hotkeys.
+-- This table is the full set of supported hotkeys. rawMask is the
+-- device-SPECIFIC flag bit (IOKit IOLLEvent.h NX_DEVICE*KEYMASK): the
+-- aggregate flags ("alt") can't tell right Option's release from left Option
+-- still being held, which would leave the mic recording.
 local PTT_KEYS = {
-  fn        = { keycode = 63, flag = "fn"   },
-  rightalt  = { keycode = 61, flag = "alt"  },
-  rightcmd  = { keycode = 54, flag = "cmd"  },
-  rightctrl = { keycode = 62, flag = "ctrl" },
+  fn        = { keycode = 63, rawMask = 0x800000 }, -- NX_SECONDARYFNMASK (no L/R twin)
+  rightalt  = { keycode = 61, rawMask = 0x40     }, -- NX_DEVICERALTKEYMASK
+  rightcmd  = { keycode = 54, rawMask = 0x10     }, -- NX_DEVICERCMDKEYMASK
+  rightctrl = { keycode = 62, rawMask = 0x2000   }, -- NX_DEVICERCTLKEYMASK
 }
 local ptt = PTT_KEYS[config.hotkey] or PTT_KEYS.fn
 
@@ -119,11 +122,42 @@ local function deviceSignature()
   table.sort(ids)
   return table.concat(ids, "|")
 end
+-- Ordinal labels "(1)/(2)" reflect enumeration order, not physical identity,
+-- and ffmpeg exposes no UIDs to resolve against (CoreAudio and AVFoundation
+-- demonstrably order devices differently) — so calibrate.sh stores the
+-- duplicate group's CoreAudio UID order and we DETECT drift instead of
+-- silently recording from the wrong twin. Recovery: re-run calibrate.sh.
+local warnedCalibration = false
+local function checkCalibrationIdentity()
+  if warnedCalibration or micMode ~= "auto" or next(screenMap) == nil then return end
+  local stored = hs.settings.get("dictate.calibration_uids")
+  if not stored or stored == "" then return end -- calibrated before UID tracking
+  local byName = {}
+  for _, d in ipairs(hs.audiodevice.allInputDevices()) do
+    local n = d:name() or "?"
+    byName[n] = byName[n] or {}
+    table.insert(byName[n], d:uid() or "?")
+  end
+  for _, uids in pairs(byName) do
+    if #uids >= 2 then -- the duplicated group calibrate.sh measured
+      local current = table.concat(uids, "|")
+      if current ~= stored then
+        warnedCalibration = true
+        hs.alert.show("Dictation: display mics changed since calibration — re-run calibrate.sh")
+        log("calibration identity mismatch: stored=" .. stored .. " current=" .. current)
+      end
+      return
+    end
+  end
+  -- duplicates absent right now (displays asleep/unplugged): nothing to compare
+end
+
 local deviceWatch = hs.timer.doEvery(2, function()
   local sig = deviceSignature()
   if sig ~= deviceSig then
     deviceSig = sig
     refreshDevices()
+    checkCalibrationIdentity()
   end
 end)
 
@@ -728,7 +762,8 @@ local function startRecording()
       log("watchdog: event tap was disabled, re-enabling")
       flagsTap:start()
     end
-    if pttDown and not hs.eventtap.checkKeyboardModifiers()[ptt.flag] then
+    local raw = hs.eventtap.checkKeyboardModifiers(true)._raw or 0
+    if pttDown and (raw & ptt.rawMask) == 0 then
       log("watchdog: missed keyup, stopping recording")
       pttDown = false
       stopRecording()
@@ -740,7 +775,7 @@ end
 
 flagsTap = hs.eventtap.new({ hs.eventtap.event.types.flagsChanged }, safely(function(e)
   if e:getKeyCode() ~= ptt.keycode then return false end
-  local isDown = e:getFlags()[ptt.flag] == true
+  local isDown = (e:getRawEventData().CGEventData.flags & ptt.rawMask) ~= 0
   if isDown and not pttDown then
     pttDown = true
     startRecording()
@@ -782,6 +817,7 @@ hs.execute('/usr/bin/pkill -9 -f "' .. WAV .. '"')
 os.remove(WAV) -- clear any leftover audio from a crash
 refreshDevices()
 deviceSig = deviceSignature() -- baseline so the poll doesn't fire a redundant refresh
+checkCalibrationIdentity()
 startServer()
 menubar:setMenu(buildMenu)
 flagsTap:start()

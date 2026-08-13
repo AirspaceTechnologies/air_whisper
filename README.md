@@ -10,7 +10,7 @@ Hold a key, talk, release — the transcript lands at your cursor in whatever ap
 git clone git@github.com:AirspaceTechnologies/air_whisper.git && cd air_whisper && ./setup.sh
 ```
 
-Add `--with-medium` to also download the larger `medium.en` model (~1.5 GB).
+Add `--with-medium` to also download the larger `medium.en` model (~1.5 GB). Requires **whisper-cpp ≥ 1.8.5** — setup.sh verifies the installed binary and tells you to `brew upgrade whisper-cpp` if it's older.
 
 **Note for existing Hammerspoon users:** setup appends `require("dictate")` to your `init.lua` without touching the rest. dictate.lua does not take ownership of any Hammerspoon singleton: device hot-plug is detected by a cheap 2-second signature poll (your `hs.audiodevice.watcher` handler, if any, is untouched), and an existing `hs.shutdownCallback` is preserved and chained.
 
@@ -49,6 +49,8 @@ Click the **🎤 menu bar icon**:
 **Why pairing is manual:** macOS doesn't expose which of two identical "Studio Display Microphone" devices belongs to which physical display. Run **`./calibrate.sh`** to measure it automatically (you scratch near the left display; the louder mic wins) — or assign by hand in the menu. Assignments are keyed to display hardware UUIDs, so they survive reboots and rearranging.
 
 The pill names the mic on every recording, so a wrong pairing is immediately visible; the decision path is also logged to `~/.dictate/log.txt`.
+
+**Known limitation:** the "(1)/(2)" numbering of identical mics reflects enumeration order, which macOS does not guarantee stable across reboots or re-plugs (and exposes no identity ffmpeg can see). Calibration therefore records the mics' hardware UIDs, and the tool alerts you to **re-run `./calibrate.sh`** if it detects the twins re-enumerated differently. Recalibration takes under a minute.
 
 ## Changing things
 
