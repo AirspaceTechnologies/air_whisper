@@ -14,6 +14,9 @@ FF="$(command -v ffmpeg || echo /opt/homebrew/bin/ffmpeg)"
 HS="$(command -v hs || echo /opt/homebrew/bin/hs)"
 T="$HOME/.dictate/tmp"
 mkdir -p "$T"
+# raw room audio must never outlive this script — covers normal exit, set -e
+# early exits, die(), and INT/TERM/HUP (bash 3.2 runs EXIT traps on signals)
+trap 'rm -f "$T/cal_1.wav" "$T/cal_2.wav"' EXIT
 
 die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 

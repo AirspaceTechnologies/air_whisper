@@ -90,7 +90,7 @@ local function refreshDevices()
       warnedMissing = {}
     end
   end, { "-hide_banner", "-f", "avfoundation", "-list_devices", "true", "-i", "" })
-  t:start()
+  if not t:start() then enumerating = false end -- else a failed launch blocks refreshes forever
 end
 
 local function findByLabel(label)
@@ -297,8 +297,12 @@ local function startServer()
     "-t", "4",
     "-sns", -- suppress non-speech tokens
   })
-  serverTask:start()
-  log("whisper-server started on port " .. config.server_port)
+  if serverTask:start() then
+    log("whisper-server started on port " .. config.server_port)
+  else
+    serverTask = nil
+    log("whisper-server failed to launch: " .. tostring(config.server_bin))
+  end
 end
 
 local function stopServer()
@@ -307,9 +311,11 @@ end
 
 -- ---------------------------------------------------------------- text cleanup
 
+-- checked AFTER cleanText capitalizes the first letter, so entries must be
+-- capitalized ("You", not just "you") to be reachable
 local BLOCKLIST = {
   ["Thank you."] = true, ["Thanks for watching."] = true,
-  ["you"] = true, ["Thank you for watching."] = true,
+  ["you"] = true, ["You"] = true, ["Thank you for watching."] = true,
 }
 
 -- Case-insensitive Lua pattern for a filler word, e.g. "um" -> "[Uu][Mm]"
@@ -353,7 +359,13 @@ local function insertText(text)
   -- restore the previous pasteboard (all types, so images survive) even on error
   hs.timer.doAfter(config.restore_delay_ms / 1000, function()
     pcall(function()
-      if saved and next(saved) ~= nil then hs.pasteboard.writeAllData(nil, saved) end
+      if saved and next(saved) ~= nil then
+        hs.pasteboard.writeAllData(nil, saved)
+      else
+        -- clipboard was empty before (readAllData returns {}): clear it
+        -- rather than leaving the transcript behind
+        hs.pasteboard.clearContents()
+      end
     end)
   end)
 end
@@ -389,7 +401,7 @@ local function transcribeCli(wav)
     else failRun("whisper-cli failed (" .. tostring(code) .. ")", err) end
   end, "cli-transcribe"), { "-m", config.model_path, "-f", wav, "--no-timestamps",
          "-l", config.language, "-t", "4" })
-  t:start()
+  if not t:start() then failRun("whisper-cli failed to launch", tostring(config.cli_bin)) end
 end
 
 transcribe = function(wav, isRetry)
@@ -404,14 +416,23 @@ transcribe = function(wav, isRetry)
       startServer()
       hs.timer.doAfter(1.5, function() transcribe(wav, true) end)
     else
-      failRun("transcription failed (curl exit " .. tostring(code) .. ")", err)
+      -- with --fail-with-body the server's error body arrives on stdout
+      failRun("transcription failed (curl exit " .. tostring(code) .. ")",
+              (out ~= nil and out ~= "" and out) or err)
     end
-  end, "transcribe"), { "-s", "--max-time", "30", SERVER_URL,
+  end, "transcribe"), {
+         -- --fail-with-body: HTTP >= 400 exits 22 instead of pasting the error
+         -- body as a transcript; connection-refused stays exit 7 for the retry.
+         -- token_timestamps=false: server default since v1.8.4 wraps segments at
+         -- 60 chars on TOKEN boundaries, splitting words (whisper.cpp #3968);
+         -- note max_len=0 is NOT a fix — the server maps 0 back to 60.
+         "-s", "--fail-with-body", "--max-time", "30", SERVER_URL,
          "-F", "file=@" .. wav,
          "-F", "response_format=text",
+         "-F", "token_timestamps=false",
          "-F", "language=" .. config.language,
          "-F", "temperature=0.0" })
-  t:start()
+  if not t:start() then failRun("curl failed to launch", "/usr/bin/curl") end
 end
 
 -- ---------------------------------------------------------------- recording
@@ -496,7 +517,15 @@ local function startRecording()
     "-t", tostring(config.max_duration_s),
     WAV,
   })
-  recTask:start()
+  -- hs.task.new returns a valid object even for a bad path; only start()
+  -- reports launch failure (false), and the callback never fires — without
+  -- this guard the pipeline would sit in "recording" until the stuck guard
+  if not recTask:start() then
+    recTask = nil
+    hs.alert.show("Dictation: recorder failed to start")
+    log("ffmpeg failed to launch: " .. tostring(config.ffmpeg_bin))
+    return -- stay idle
+  end
   setState("recording")
   log(string.format("recording via %s [%d] (%s)", dev.label, dev.globalIndex, how))
   -- flip the pill to "Listening" once audio bytes are actually flowing
