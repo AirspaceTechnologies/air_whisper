@@ -28,6 +28,19 @@ local function log(msg)
   end
 end
 
+-- The ONLY way to SIGKILL a task's process: pid() returns 0 for a
+-- never-started task and "kill -9 0" would take out Hammerspoon's whole
+-- process group; capturing the pid once also avoids racing an exit into a
+-- recycled pid. (Measured: pid() stays at the stale pid after exit, so the
+-- isRunning gate is what keeps us off dead/recycled pids.)
+local function killTask(task)
+  if not task then return end
+  local pid = task:pid()
+  if task:isRunning() and pid and pid > 0 then
+    hs.execute("/bin/kill -9 " .. tostring(pid))
+  end
+end
+
 -- ---------------------------------------------------------------- settings
 -- config.lua holds hand-edited defaults; menu choices persist via hs.settings
 -- and take precedence.
@@ -226,11 +239,7 @@ local function safely(fn, where)
     -- kill a live recorder BEFORE resetting state: setState("idle") disarms
     -- the stuck guard, and an orphaned ffmpeg would record to the -t cap and
     -- then paste minutes of ambient audio into whatever has focus
-    pcall(function()
-      if recTask and recTask:isRunning() then
-        hs.execute("/bin/kill -9 " .. tostring(recTask:pid()))
-      end
-    end)
+    pcall(killTask, recTask)
     pcall(os.remove, WAV)
     pcall(setState, "idle")
     return false
@@ -333,12 +342,7 @@ local startServer -- forward declaration (restartServer/verifyOwnership recurse 
 local function restartServer()
   serverReady = false
   if serverTask then
-    local pid = serverTask:pid()
-    -- the pid > 0 guard is critical: pid() returns 0 for a never-started
-    -- task, and "kill -9 0" would SIGKILL Hammerspoon's whole process group
-    if serverTask:isRunning() and pid and pid > 0 then
-      hs.execute("/bin/kill -9 " .. tostring(pid)) -- hung servers ignore SIGTERM
-    end
+    killTask(serverTask) -- SIGKILL: hung servers ignore SIGTERM
     serverTask = nil -- orphan the handle; its callbacks identity-check and no-op
   end
   startServer()
@@ -433,14 +437,7 @@ startServer = function()
 end
 
 local function stopServer()
-  if serverTask and serverTask:isRunning() then
-    local pid = serverTask:pid()
-    if pid and pid > 0 then
-      hs.execute("/bin/kill -9 " .. tostring(pid)) -- a hung server ignores SIGTERM
-    else
-      serverTask:terminate()
-    end
-  end
+  killTask(serverTask) -- SIGKILL: a hung server ignores SIGTERM
 end
 
 -- ---------------------------------------------------------------- text cleanup
@@ -497,6 +494,9 @@ local function insertText(text)
     hs.timer.doAfter(config.restore_delay_ms / 1000, function()
       pcall(function()
         if hs.pasteboard.changeCount() ~= ours then return end
+        -- content check backs up changeCount: a writer landing in the
+        -- microseconds before we sampled it would otherwise count as us
+        if hs.pasteboard.getContents() ~= text then return end
         if saved and next(saved) ~= nil then
           hs.pasteboard.writeAllData(nil, saved)
         else
@@ -541,16 +541,17 @@ local transcribe -- forward declaration (retry recursion)
 
 -- Wait (bounded) for the server to become ready before uploading — a single
 -- fixed-delay retry loses to slow cold starts; this covers them up to the
--- deadline and then fails closed.
-local function waitForReady(wav, deadline)
+-- deadline and then fails closed. isRetry passes through unchanged so that
+-- merely waiting on a cold start doesn't consume the one transport retry.
+local function waitForReady(wav, deadline, isRetry)
   if serverReady and serverTask and serverTask:isRunning() then
-    return transcribe(wav, true)
+    return transcribe(wav, isRetry)
   end
   if hs.timer.secondsSinceEpoch() >= deadline then
     return failRun("transcription server unavailable",
                    "not ready on port " .. serverPort)
   end
-  hs.timer.doAfter(0.5, function() waitForReady(wav, deadline) end)
+  hs.timer.doAfter(0.5, function() waitForReady(wav, deadline, isRetry) end)
 end
 
 local function transcribeCli(wav)
@@ -580,7 +581,7 @@ transcribe = function(wav, isRetry)
     else
       startServer()
     end
-    return waitForReady(wav, hs.timer.secondsSinceEpoch() + 15)
+    return waitForReady(wav, hs.timer.secondsSinceEpoch() + 15, isRetry)
   end
   local t = hs.task.new("/usr/bin/curl", safely(function(code, out, err)
     if code == 0 then
@@ -592,7 +593,7 @@ transcribe = function(wav, isRetry)
       -- no-op on a still-running-but-hung task).
       log("server unreachable (curl exit " .. tostring(code) .. "), force-restarting")
       restartServer()
-      waitForReady(wav, hs.timer.secondsSinceEpoch() + 15)
+      waitForReady(wav, hs.timer.secondsSinceEpoch() + 15, true)
     else
       -- with --fail-with-body the server's error body arrives on stdout
       failRun("transcription failed (curl exit " .. tostring(code) .. ")",
@@ -654,7 +655,7 @@ local function interruptRecorder()
   hs.timer.doAfter(3, function()
     if t:isRunning() then
       log("recorder ignored SIGINT for 3s — sending SIGKILL")
-      hs.execute("/bin/kill -9 " .. tostring(t:pid()))
+      killTask(t)
     end
   end)
 end
@@ -767,11 +768,7 @@ local stuckGuard = hs.timer.doEvery(15, function()
   if state ~= "idle" and stuckFor > config.max_duration_s + 45 then
     log(string.format("stuck-state guard: state=%s for %.0fs, forcing idle", state, stuckFor))
     hs.alert.show("Dictation reset (was stuck)")
-    pcall(function()
-      if recTask and recTask:isRunning() then
-        hs.execute("/bin/kill -9 " .. tostring(recTask:pid()))
-      end
-    end)
+    pcall(killTask, recTask)
     stopWatchdog()
     finishRun()
   end
@@ -794,11 +791,7 @@ local priorShutdown = hs.shutdownCallback -- chain another module's handler, don
 hs.shutdownCallback = function()
   -- runs on quit AND on config reload: never abandon a live recorder — after
   -- a reload nothing drains its stderr pipe and no Lua state can reach it
-  pcall(function()
-    if recTask and recTask:isRunning() then
-      hs.execute("/bin/kill -9 " .. tostring(recTask:pid()))
-    end
-  end)
+  pcall(killTask, recTask)
   pcall(os.remove, WAV)
   pcall(stopServer)
   if type(priorShutdown) == "function" then pcall(priorShutdown) end

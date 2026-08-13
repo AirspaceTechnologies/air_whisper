@@ -17,7 +17,7 @@ Machine facts (verified 2026-08-11): Homebrew and ffmpeg are installed; whisper-
 Mic devices are dynamic on this machine, so selection is a runtime feature, not a setup-time constant.
 
 - **Device identity** is `(name, same-name index)` — avfoundation's own scheme for duplicates. ffmpeg selects with `-audio_device_index <k> -i ":<NAME>"` (k is 0-based among devices sharing that name). Two Studio Display mics are "Studio Display Microphone" #0 and #1.
-- **Cached device list**: the module keeps an in-memory device list, refreshed by an `hs.audiodevice.watcher` (fires on device add/remove) and whenever the menu opens. Enumeration parses the stderr of `ffmpeg -f avfoundation -list_devices true -i ""`. Never enumerate at key-down — a subprocess there would delay capture start and clip the first words; key-down resolves the device from the cache instantly.
+- **Cached device list**: the module keeps an in-memory device list, refreshed by a cheap 2-second device-signature poll (`hs.audiodevice.allInputDevices()` UIDs, ~0.04 ms per check; the ffmpeg enumeration runs only when the signature changes) and whenever the menu opens. No Hammerspoon singleton is owned — an existing config's `hs.audiodevice.watcher` handler is untouched. Enumeration parses the stderr of `ffmpeg -f avfoundation -list_devices true -i ""`. Never enumerate at key-down — a subprocess there would delay capture start and clip the first words; key-down resolves the device from the cache instantly.
 - **Menu bar dropdown** (the menu bar icon doubles as the menu):
   - **Auto — follow focused screen** (mode toggle, see below)
   - Radio list of currently-present input devices; duplicates rendered as "Studio Display Microphone (1)" / "(2)"
@@ -70,22 +70,24 @@ Start as a background `hs.task` on key-down; stop on key-up with SIGINT (`hs.tas
 
 ## Transcription — persistent server
 
-Started by the Hammerspoon module on load:
+Started by the Hammerspoon module on load, on a per-launch port (`server_port` base + random 1..99 — makes accidentally sharing a port with another whisper-server improbable; whisper-server sets SO_REUSEPORT, so two servers CAN silently share one):
 
 ```
-whisper-server -m ~/.dictate/models/ggml-small.en.bin --host 127.0.0.1 --port 12800 -t 4
+whisper-server -m ~/.dictate/models/ggml-small.en.bin --host 127.0.0.1 --port <port> -t 4 -sns
 ```
 
-Request on key-up (transcript is the response body):
+Request on key-up (transcript is the response body; `--fail-with-body` keeps HTTP error bodies out of the paste path, `token_timestamps=false` avoids the 60-char token-boundary wrapping regression, whisper.cpp #3968):
 
 ```
-curl -s --max-time 30 http://127.0.0.1:12800/inference -F file=@$HOME/.dictate/tmp/rec.wav -F response_format=text -F language=en -F temperature=0.0
+curl -s --fail-with-body --max-time 30 http://127.0.0.1:<port>/inference -F file=@$HOME/.dictate/tmp/rec.wav -F response_format=text -F token_timestamps=false -F language=en -F temperature=0.0
 ```
 
 Lifecycle rules:
 
-- Server is spawned as an `hs.task` when the module loads and killed on Hammerspoon reload/exit.
-- On connection-refused: restart the server, retry the request once after ~1.5 s, otherwise `hs.alert` the error and log. This also covers the warm-up window right after login/reload.
+- Server is spawned as an `hs.task` **with a streaming drain callback** — hs.task only reads a long-lived task's pipes when one is set; without it the 64 KiB stderr pipe fills after ~170 requests and the server write-blocks permanently. SIGKILLed on Hammerspoon reload/exit (a hung server ignores SIGTERM).
+- **Readiness is proven, not assumed**: an identity-guarded HTTP probe (wall-clock deadline; the "listening at" stdout line is fully buffered into pipes and unusable) plus an `lsof` check that OUR pid is the port's only listener. Fail closed: audio is never uploaded unless both hold. Ownership failure re-rolls to a new random port (bounded).
+- On curl exit 7 (refused) or 28 (timeout — a hung server keeps LISTENing, so refused can never fire): force-REPLACE the server (kill + fresh task + fresh port) and wait bounded for readiness before the single retry.
+- A dictation arriving before readiness waits (bounded ~15 s, covering cold Metal-compile starts) instead of failing.
 - Bind 127.0.0.1 only, never 0.0.0.0.
 
 Fallback (`transcribe_mode = "cli"`, used if the server binary is absent):
