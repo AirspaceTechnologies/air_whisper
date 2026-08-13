@@ -40,14 +40,16 @@ if [[ -z "$WHISPER_SERVER" ]]; then TRANSCRIBE_MODE="cli"; fi
 
 # The server must honor the per-request token_timestamps field (v1.8.5+,
 # PR #3785), or long dictations hit the 60-char mid-word wrapping regression
-# introduced in v1.8.4. Version is only trustworthy from Homebrew's records:
-# string-probing the binary false-passes debug builds (DWARF embeds the bare
-# identifier) and a grep -q pipe can SIGPIPE the producer under pipefail.
+# introduced in v1.8.4. Version comes from resolving the EXECUTABLE's own keg
+# (readlink -f into Cellar/): `brew list --versions` reports every installed
+# keg and its first entry may not be the linked one; string-probing the binary
+# false-passes debug builds (DWARF embeds the bare identifier).
 MIN_WHISPER="1.8.5"
 if [[ "$TRANSCRIBE_MODE" == "server" && "${DICTATE_SKIP_VERSION_CHECK:-0}" != "1" ]]; then
-  if [[ "$WHISPER_SERVER" == "$(brew --prefix)"* ]]; then
-    ver="$(brew list --versions whisper-cpp 2>/dev/null | awk '{print $2}' || true)"
-    [[ -n "$ver" ]] || die "cannot determine the whisper-cpp version from Homebrew"
+  real="$(readlink -f "$WHISPER_SERVER" 2>/dev/null || true)"
+  ver="$(sed -nE 's|.*/Cellar/whisper-cpp/([^/]+)/.*|\1|p' <<<"$real")"
+  ver="${ver%%_*}" # strip any keg revision suffix (e.g. 1.9.2_1)
+  if [[ -n "$ver" ]]; then
     if [[ "$(printf '%s\n%s\n' "$MIN_WHISPER" "$ver" | sort -V | head -1)" != "$MIN_WHISPER" ]]; then
       die "whisper-cpp $ver is too old (need >= $MIN_WHISPER for the per-request
 token_timestamps field). Upgrade:  brew upgrade whisper-cpp   then re-run ./setup.sh"
