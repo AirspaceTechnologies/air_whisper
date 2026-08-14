@@ -44,6 +44,12 @@ local function killTask(task)
   end
 end
 
+-- Crash hygiene MUST precede any early return below: after a crash an orphan
+-- recorder can still hold the mic and its WAV can sit on disk — a config
+-- error must not leave them in place.
+hs.execute('/usr/bin/pkill -9 -f "' .. WAV .. '"') -- stray recorder from a crash
+os.remove(WAV) -- leftover audio from a crash
+
 -- Fail CLOSED on an invalid hotkey: silently falling back to fn would arm the
 -- microphone on a key the user never chose, while the ready alert displayed
 -- the value they typed. No hotkey, no dictation, loud message.
@@ -889,10 +895,9 @@ end)
 
 -- ---------------------------------------------------------------- init
 
--- SIGKILL stray recorders from a crash/reload: a write-blocked one ignores
--- everything milder (see the -nostats note in startRecording)
-hs.execute('/usr/bin/pkill -9 -f "' .. WAV .. '"')
-os.remove(WAV) -- clear any leftover audio from a crash
+-- (crash hygiene — stray-recorder pkill + WAV removal — runs at the TOP of
+-- this file, before the hotkey validation gate, so a config error can never
+-- skip it)
 refreshDevices()
 deviceSig = deviceSignature() -- baseline so the poll doesn't fire a redundant refresh
 checkCalibrationIdentity()

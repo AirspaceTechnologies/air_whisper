@@ -64,7 +64,7 @@ If any regular key goes down while the PTT key is held (fn+arrows, fn+delete are
 Device resolved at key-down from the cached list (see Microphone selection):
 
 ```
-ffmpeg -y -f avfoundation -audio_device_index <k> -i ":<AUDIO_DEVICE_NAME>" -ar 16000 -ac 1 -acodec pcm_s16le -t <max_duration_s> ~/.dictate/tmp/rec.wav
+ffmpeg -nostats -loglevel error -y -f avfoundation -audio_device_index <global-index> -i ":" -ar 16000 -ac 1 -acodec pcm_s16le -flush_packets 1 -t <max_duration_s> ~/.dictate/tmp/rec.wav
 ```
 
 Start as a background `hs.task` on key-down; stop on key-up with SIGINT (`hs.task:interrupt()`, not SIGKILL) so the WAV header is finalized. The `-t` cap is a safety net: if a key-up is ever missed (secure input, display sleep, Hammerspoon reload mid-hold), the mic does not stay open forever.
@@ -113,7 +113,7 @@ return {
   server_port       = 12800,
   ffmpeg_bin        = "/opt/homebrew/bin/ffmpeg",
   mic_mode          = "auto",         -- "auto" (follow focused screen) or "fixed"
-  audio_device      = { name = "MacBook Pro Microphone", index = 0 },  -- fixed/fallback mic; index is among same-named devices
+  audio_device      = { name = "MacBook Pro Microphone" },   -- fallback mic, matched by name
   min_duration_s    = 0.5,            -- discard shorter recordings
   max_duration_s    = 120,            -- hard cap; passed to ffmpeg -t
   language          = "en",
@@ -149,7 +149,7 @@ Default: save the **full pasteboard contents including non-text types** (`hs.pas
 
 ## Deliverables
 
-1. **`setup.sh`** — idempotent. Checks for Homebrew (exit with instructions if missing); installs hammerspoon, ffmpeg, whisper-cpp if absent; creates `~/.dictate/{models,tmp}`; downloads the model(s) with `curl -L` and minimum-size verification; enumerates avfoundation audio devices and writes the chosen fallback device (name + same-name index) into a fresh `~/.dictate/config.lua`; resolves and writes the whisper-server / whisper-cli paths; installs the Lua module into `~/.hammerspoon/dictate.lua` and appends `require("dictate")` to `~/.hammerspoon/init.lua` if not already present; finishes by printing the manual steps the user must do: grant Microphone and Accessibility permissions to Hammerspoon, and set the Globe key to "Do Nothing". Day-to-day mic changes happen in the menu, not by re-running setup.
+1. **`setup.sh`** — idempotent. Checks for Homebrew (exit with instructions if missing); installs hammerspoon, ffmpeg, whisper-cpp if absent; creates `~/.dictate/{models,tmp}`; downloads the model(s) with `curl -L` and minimum-size verification; enumerates avfoundation audio devices and writes the chosen fallback device (by name) into a fresh `~/.dictate/config.lua`; resolves and writes the whisper-server / whisper-cli paths; installs the Lua module into `~/.hammerspoon/dictate.lua` and appends `require("dictate")` to `~/.hammerspoon/init.lua` if not already present; finishes by printing the manual steps the user must do: grant Microphone and Accessibility permissions to Hammerspoon, and set the Globe key to "Do Nothing". Day-to-day mic changes happen in the menu, not by re-running setup.
 2. **`dictate.lua`** — the Hammerspoon module, commented, reading all settings from the config file.
 3. **`README.md`** — must include, precisely:
    - One-line install: `git clone … && ./setup.sh`
