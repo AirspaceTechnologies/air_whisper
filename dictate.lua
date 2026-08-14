@@ -4,9 +4,23 @@
 -- The menu bar icon is also the mic selector: pick a fixed device, or
 -- "Auto — follow focused screen" with per-screen mic assignments.
 
-local config = dofile(os.getenv("HOME") .. "/.dictate/config.lua")
-
+-- Crash hygiene FIRST, before anything that can fail — including loading the
+-- config: after a crash an orphan recorder can still hold the mic and its
+-- WAV can sit on disk. This path is deliberately config-independent.
 local WAV = os.getenv("HOME") .. "/.dictate/tmp/rec.wav"
+hs.execute('/usr/bin/pkill -9 -f "' .. WAV .. '"') -- stray recorder from a crash
+os.remove(WAV) -- leftover audio from a crash
+
+-- Fail CLOSED on a broken config: an unguarded dofile error here would abort
+-- the rest of the init.lua chain with an opaque stack trace.
+local ok, config = pcall(dofile, os.getenv("HOME") .. "/.dictate/config.lua")
+if not ok or type(config) ~= "table" then
+  local msg = "Dictation disabled: ~/.dictate/config.lua failed to load ("
+              .. tostring(config) .. ")"
+  hs.alert.show(msg, 6)
+  print(msg) -- Hammerspoon console; the log path lives in the config we just lost
+  return { disabled = true }
+end
 
 -- flagsChanged keycodes for modifier keys usable alone as push-to-talk.
 -- This table is the full set of supported hotkeys. rawMask is the
@@ -43,12 +57,6 @@ local function killTask(task)
     hs.execute("/bin/kill -9 " .. tostring(pid))
   end
 end
-
--- Crash hygiene MUST precede any early return below: after a crash an orphan
--- recorder can still hold the mic and its WAV can sit on disk — a config
--- error must not leave them in place.
-hs.execute('/usr/bin/pkill -9 -f "' .. WAV .. '"') -- stray recorder from a crash
-os.remove(WAV) -- leftover audio from a crash
 
 -- Fail CLOSED on an invalid hotkey: silently falling back to fn would arm the
 -- microphone on a key the user never chose, while the ready alert displayed
