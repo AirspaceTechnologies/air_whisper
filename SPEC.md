@@ -16,7 +16,7 @@ Machine facts (verified 2026-08-11): Homebrew and ffmpeg are installed; whisper-
 
 Mic devices are dynamic on this machine, so selection is a runtime feature, not a setup-time constant.
 
-- **Device identity** is `(name, same-name index)` — avfoundation's own scheme for duplicates. ffmpeg selects with `-audio_device_index <k> -i ":<NAME>"` (k is 0-based among devices sharing that name). Two Studio Display mics are "Studio Display Microphone" #0 and #1.
+- **Device identity** in the UI is `(name, occurrence)` — duplicates render as "Name (1)"/"(2)". At recording time the label resolves to the device's **global** AVFoundation index from the cached enumeration, passed as `-audio_device_index <global>` with a placeholder `-i ":"` (verified: the index is global and overrides any name; the help text's "for devices with same name" describes the use case, not the semantics).
 - **Cached device list**: the module keeps an in-memory device list, refreshed by a cheap 2-second device-signature poll (`hs.audiodevice.allInputDevices()` UIDs, ~0.04 ms per check; the ffmpeg enumeration runs only when the signature changes) and whenever the menu opens. No Hammerspoon singleton is owned — an existing config's `hs.audiodevice.watcher` handler is untouched. Enumeration parses the stderr of `ffmpeg -f avfoundation -list_devices true -i ""`. Never enumerate at key-down — a subprocess there would delay capture start and clip the first words; key-down resolves the device from the cache instantly.
 - **Menu bar dropdown** (the menu bar icon doubles as the menu):
   - **Auto — follow focused screen** (mode toggle, see below)

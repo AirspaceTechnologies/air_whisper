@@ -19,7 +19,7 @@ local PTT_KEYS = {
   rightcmd  = { keycode = 54, rawMask = 0x10     }, -- NX_DEVICERCMDKEYMASK
   rightctrl = { keycode = 62, rawMask = 0x2000   }, -- NX_DEVICERCTLKEYMASK
 }
-local ptt = PTT_KEYS[config.hotkey] or PTT_KEYS.fn
+local ptt = PTT_KEYS[config.hotkey] -- validated below, after log() exists
 
 -- ---------------------------------------------------------------- logging
 
@@ -42,6 +42,17 @@ local function killTask(task)
   if task:isRunning() and pid and pid > 0 then
     hs.execute("/bin/kill -9 " .. tostring(pid))
   end
+end
+
+-- Fail CLOSED on an invalid hotkey: silently falling back to fn would arm the
+-- microphone on a key the user never chose, while the ready alert displayed
+-- the value they typed. No hotkey, no dictation, loud message.
+if not ptt then
+  local msg = 'Dictation disabled: invalid hotkey "' .. tostring(config.hotkey)
+              .. '" in ~/.dictate/config.lua — valid: fn, rightalt, rightcmd, rightctrl'
+  log(msg)
+  hs.alert.show(msg, 6)
+  return { disabled = true }
 end
 
 -- ---------------------------------------------------------------- settings

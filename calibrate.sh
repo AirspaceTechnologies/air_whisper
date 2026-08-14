@@ -25,6 +25,9 @@ trap 'for p in ${P1:-} ${P2:-}; do kill -9 "$p" 2>/dev/null || true; done
 
 die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 
+[[ -x "$HS" ]] \
+  || die "the 'hs' command-line tool is missing (manual Hammerspoon install?) —
+run  hs.ipc.cliInstall()  in the Hammerspoon console, then retry"
 "$HS" -c 'print("ok")' >/dev/null 2>&1 \
   || die "Can't reach Hammerspoon. Is it running with permissions granted? (run ./setup.sh first)"
 
