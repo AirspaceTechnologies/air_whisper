@@ -15,8 +15,13 @@ HS="$(command -v hs || echo /opt/homebrew/bin/hs)"
 T="$HOME/.dictate/tmp"
 mkdir -p "$T"
 # raw room audio must never outlive this script — covers normal exit, set -e
-# early exits, die(), and INT/TERM/HUP (bash 3.2 runs EXIT traps on signals)
-trap 'rm -f "$T/cal_1.wav" "$T/cal_2.wav"' EXIT
+# early exits, die(), and INT/TERM/HUP (bash 3.2 runs EXIT traps on signals).
+# Kill (SIGKILL — SIGINT would make ffmpeg FINALIZE the file) and reap any
+# live recorder BEFORE deleting: an unreaped recorder can recreate its WAV
+# after the trap has run (verified in simulation).
+trap 'for p in ${P1:-} ${P2:-}; do kill -9 "$p" 2>/dev/null || true; done
+      wait 2>/dev/null || true
+      rm -f "$T/cal_1.wav" "$T/cal_2.wav"' EXIT
 
 die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 
@@ -58,10 +63,14 @@ P2=$!
 "$HS" -c 'for _, s in ipairs(hs.screen.allScreens()) do
   hs.alert.show("👈 SCRATCH near the LEFT display mic NOW!", {textSize=32}, s, 7)
 end' >/dev/null 2>&1 || true
-# separate waits: a combined `wait P1 P2` returns only the LAST pid's status,
-# silently swallowing a first-recorder failure
-wait "$P1" || die "recording from mic (1) failed (device index $I1)"
-wait "$P2" || die "recording from mic (2) failed (device index $I2)"
+# separate waits (a combined `wait P1 P2` returns only the LAST pid's status,
+# silently swallowing a first-recorder failure) — and BOTH are collected
+# before either can die, so a mic-1 failure never orphans mic-2's recorder
+S1=0; S2=0
+wait "$P1" || S1=$?
+wait "$P2" || S2=$?
+[[ $S1 -eq 0 ]] || die "recording from mic (1) failed (device index $I1, status $S1)"
+[[ $S2 -eq 0 ]] || die "recording from mic (2) failed (device index $I2, status $S2)"
 
 vol() { "$FF" -i "$1" -af volumedetect -f null - 2>&1 | awk -F': ' '/mean_volume/ {print $2+0}'; }
 V1="$(vol "$T/cal_1.wav")"
