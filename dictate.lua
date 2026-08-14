@@ -136,15 +136,21 @@ end
 local function refreshDevices()
   if enumerating then return end
   enumerating = true
+  -- sample BEFORE spawning ffmpeg: committing a completion-time signature
+  -- would bind the NEW signature to the OLD cache when a hot-plug lands
+  -- mid-enumeration, and the poll would never refresh. The pre-sample is
+  -- conservative in both directions: a change before ffmpeg reads costs one
+  -- redundant refresh; a change after it triggers the retry we need.
+  local sigAtStart = deviceSignature()
   local t = hs.task.new(config.ffmpeg_bin, function(_, _, stderr)
     enumerating = false
     local devs = parseDeviceList(stderr or "")
     if #devs > 0 then
       deviceCache = devs
       warnedMissing = {}
-      -- sole writer, and ONLY on success: updating on a failed enumeration
-      -- would strand the stale cache exactly like the original race
-      deviceSig = deviceSignature()
+      -- sole writer, ONLY on success (a failed enumeration must leave the
+      -- signature stale so the poll retries)
+      deviceSig = sigAtStart
     end
   end, { "-hide_banner", "-f", "avfoundation", "-list_devices", "true", "-i", "" })
   if not t:start() then enumerating = false end -- else a failed launch blocks refreshes forever
