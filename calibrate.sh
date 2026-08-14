@@ -66,13 +66,15 @@ end' >/dev/null 2>&1 || true
 # separate waits (a combined `wait P1 P2` returns only the LAST pid's status,
 # silently swallowing a first-recorder failure) — and BOTH are collected
 # before either can die, so a mic-1 failure never orphans mic-2's recorder
+# each PID is cleared the moment its own wait reaps it — never earlier (the
+# trap must still kill a live recorder) and never later (a signal arriving
+# while blocked on the OTHER wait fires the trap, which must not SIGKILL a
+# process that recycled an already-reaped PID)
 S1=0; S2=0
 wait "$P1" || S1=$?
+P1=""
 wait "$P2" || S2=$?
-# both recorders are now definitively reaped: clear the PIDs BEFORE the status
-# checks so the EXIT trap (on this die path or normal exit) can never SIGKILL
-# an unrelated process that recycled one of them
-P1=""; P2=""
+P2=""
 [[ $S1 -eq 0 ]] || die "recording from mic (1) failed (device index $I1, status $S1)"
 [[ $S2 -eq 0 ]] || die "recording from mic (2) failed (device index $I2, status $S2)"
 
