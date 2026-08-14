@@ -10,6 +10,11 @@
 local WAV = os.getenv("HOME") .. "/.dictate/tmp/rec.wav"
 hs.execute('/usr/bin/pkill -9 -f "' .. WAV .. '"') -- stray recorder from a crash
 os.remove(WAV) -- leftover audio from a crash
+-- keep ~/.dictate private on every load: ffmpeg creates recordings under
+-- Hammerspoon's default umask (0644), and macOS home dirs are staff-group
+-- traversable — the 0700 directory is what keeps live audio unreadable to
+-- other local users (metadata-only chmod; cost is trivial)
+hs.execute('/bin/chmod -R go-rwx "' .. os.getenv("HOME") .. '/.dictate" 2>/dev/null')
 
 -- Fail CLOSED on a broken config: an unguarded dofile error here would abort
 -- the rest of the init.lua chain with an opaque stack trace.

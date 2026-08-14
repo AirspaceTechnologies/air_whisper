@@ -14,6 +14,13 @@ MEDIUM_MIN_BYTES=1400000000  # medium.en is ~1.5 GB
 WITH_MEDIUM=0
 if [[ "${1:-}" == "--with-medium" ]]; then WITH_MEDIUM=1; fi
 
+# Everything under ~/.dictate is private to the user: the tmp dir briefly
+# holds raw microphone audio, and macOS home directories are group-traversable
+# by "staff" by default. umask covers what THIS script creates; the module
+# repairs directory modes at every load for files ffmpeg/Hammerspoon create
+# under their own umask.
+umask 077
+
 bold() { printf '\n\033[1m%s\033[0m\n' "$*"; }
 die()  { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 
@@ -64,6 +71,8 @@ fi
 # ---------------------------------------------------------------- 3. Models
 bold "Checking models…"
 mkdir -p "$MODELS_DIR" "$DICTATE_DIR/tmp"
+# repair pre-umask installs: 0700 dirs, no group/other on anything inside
+chmod -R go-rwx "$DICTATE_DIR"
 
 download_model() { # file min_bytes
   local dest="$MODELS_DIR/$1"
