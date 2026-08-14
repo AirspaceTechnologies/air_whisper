@@ -69,6 +69,10 @@ end' >/dev/null 2>&1 || true
 S1=0; S2=0
 wait "$P1" || S1=$?
 wait "$P2" || S2=$?
+# both recorders are now definitively reaped: clear the PIDs BEFORE the status
+# checks so the EXIT trap (on this die path or normal exit) can never SIGKILL
+# an unrelated process that recycled one of them
+P1=""; P2=""
 [[ $S1 -eq 0 ]] || die "recording from mic (1) failed (device index $I1, status $S1)"
 [[ $S2 -eq 0 ]] || die "recording from mic (2) failed (device index $I2, status $S2)"
 
