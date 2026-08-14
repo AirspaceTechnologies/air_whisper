@@ -284,10 +284,20 @@ local function setState(s)
   end
 end
 
--- forward declaration: safely() must be able to kill a live recorder, but
--- recTask is assigned in the recording section further down; without this
--- the reference inside safely would silently resolve to a nil global
+-- forward declarations: safely() must be able to kill a live recorder and a
+-- live CLI transcriber, but both are assigned in sections further down;
+-- without these the references inside safely would silently resolve to nil
+-- globals
 local recTask
+local cliTask
+
+-- Disarm-then-kill for the CLI transcriber: nil FIRST so its identity-guarded
+-- callback no-ops instead of pasting a stale transcript after a reset
+local function disarmCliTask()
+  local t = cliTask
+  cliTask = nil
+  killTask(t)
+end
 
 -- Wrap tap/task callbacks so a Lua error logs and resets to idle instead of
 -- freezing the pipeline mid-state (a frozen "Listening…" pill is worse than a
@@ -302,6 +312,7 @@ local function safely(fn, where)
     -- the stuck guard, and an orphaned ffmpeg would record to the -t cap and
     -- then paste minutes of ambient audio into whatever has focus
     pcall(killTask, recTask)
+    pcall(disarmCliTask)
     pcall(os.remove, WAV)
     pcall(setState, "idle")
     return false
@@ -611,6 +622,13 @@ local function waitForReady(wav, deadline, isRetry)
     return transcribe(wav, isRetry)
   end
   if hs.timer.secondsSinceEpoch() >= deadline then
+    if serverTask and serverTask:isRunning() and not serverReady then
+      -- a server that blew its readiness deadline is presumed hung; leaving
+      -- it running would make every future dictation re-probe the same
+      -- dead-end process forever
+      log("server missed readiness deadline — replacing it")
+      restartServer()
+    end
     return failRun("transcription server unavailable",
                    "not ready on port " .. serverPort)
   end
@@ -618,12 +636,27 @@ local function waitForReady(wav, deadline, isRetry)
 end
 
 local function transcribeCli(wav)
-  local t = hs.task.new(config.cli_bin, safely(function(code, out, err)
+  local thisTask -- declared first so the callback captures THIS name
+  thisTask = hs.task.new(config.cli_bin, safely(function(code, out, err)
+    if cliTask ~= thisTask then return end -- superseded by a recovery reset
+    cliTask = nil
     if code == 0 then handleTranscript(out)
     else failRun("whisper-cli failed (" .. tostring(code) .. ")", err) end
   end, "cli-transcribe"), { "-m", config.model_path, "-f", wav, "--no-timestamps",
          "-l", config.language, "-t", "4" })
-  if not t:start() then failRun("whisper-cli failed to launch", tostring(config.cli_bin)) end
+  cliTask = thisTask
+  if not thisTask:start() then
+    cliTask = nil
+    return failRun("whisper-cli failed to launch", tostring(config.cli_bin))
+  end
+  -- bounded: an unwedged run finishes in seconds; without a cap a wedged CLI
+  -- would outlive the stuck guard's reset and paste stale text much later
+  hs.timer.doAfter(90, function()
+    if cliTask == thisTask and thisTask:isRunning() then
+      log("whisper-cli timed out after 90s — killing")
+      killTask(thisTask) -- callback still identity-matches and runs failRun
+    end
+  end)
 end
 
 transcribe = function(wav, isRetry)
@@ -837,6 +870,7 @@ local stuckGuard = hs.timer.doEvery(15, function()
     log(string.format("stuck-state guard: state=%s for %.0fs, forcing idle", state, stuckFor))
     hs.alert.show("Dictation reset (was stuck)")
     pcall(killTask, recTask)
+    pcall(disarmCliTask)
     stopWatchdog()
     finishRun()
   end
@@ -858,9 +892,11 @@ keyTap:start()
 setState("idle")
 local priorShutdown = hs.shutdownCallback -- chain another module's handler, don't clobber it
 hs.shutdownCallback = function()
-  -- runs on quit AND on config reload: never abandon a live recorder — after
-  -- a reload nothing drains its stderr pipe and no Lua state can reach it
+  -- runs on quit AND on config reload: never abandon a live recorder or
+  -- transcriber — after a reload nothing drains their pipes and no Lua state
+  -- can reach them
   pcall(killTask, recTask)
+  pcall(disarmCliTask)
   pcall(os.remove, WAV)
   pcall(stopServer)
   if type(priorShutdown) == "function" then pcall(priorShutdown) end

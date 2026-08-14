@@ -24,9 +24,12 @@ die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
   || die "Can't reach Hammerspoon. Is it running with permissions granted? (run ./setup.sh first)"
 
 # ---- find the mic name that appears exactly twice --------------------------
+# ffmpeg exits nonzero (EIO) after -list_devices BY DESIGN; without || true,
+# pipefail turned this assignment into an unconditional abort — the script
+# could never get past discovery. Output content is validated just below.
 DEVLIST="$("$FF" -f avfoundation -list_devices true -i "" 2>&1 \
   | sed -n '/AVFoundation audio devices:/,$p' | grep -E '\[[0-9]+\]' \
-  | sed -E 's/^\[[^]]*\] \[([0-9]+)\] (.*)$/\1\t\2/')"
+  | sed -E 's/^\[[^]]*\] \[([0-9]+)\] (.*)$/\1\t\2/' || true)"
 DUP_NAME="$(printf '%s\n' "$DEVLIST" | cut -f2 | sort | uniq -c | awk '$1 == 2 {sub(/^ *2 /,""); print; exit}')"
 [[ -n "$DUP_NAME" ]] || die "No microphone name appears exactly twice — nothing to calibrate."
 I1="$(printf '%s\n' "$DEVLIST" | awk -F'\t' -v n="$DUP_NAME" '$2 == n {print $1; exit}')"
@@ -55,7 +58,10 @@ P2=$!
 "$HS" -c 'for _, s in ipairs(hs.screen.allScreens()) do
   hs.alert.show("👈 SCRATCH near the LEFT display mic NOW!", {textSize=32}, s, 7)
 end' >/dev/null 2>&1 || true
-wait "$P1" "$P2"
+# separate waits: a combined `wait P1 P2` returns only the LAST pid's status,
+# silently swallowing a first-recorder failure
+wait "$P1" || die "recording from mic (1) failed (device index $I1)"
+wait "$P2" || die "recording from mic (2) failed (device index $I2)"
 
 vol() { "$FF" -i "$1" -af volumedetect -f null - 2>&1 | awk -F': ' '/mean_volume/ {print $2+0}'; }
 V1="$(vol "$T/cal_1.wav")"
