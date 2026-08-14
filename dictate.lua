@@ -98,6 +98,20 @@ local deviceCache = {}   -- array of { name, globalIndex, label }
 local warnedMissing = {}
 local enumerating = false
 
+-- Cheap CoreAudio device signature (~0.04ms). deviceSig is written ONLY by
+-- enumeration completion: if a refresh gets dropped by the busy-guard, the
+-- signature stays stale and the 2s poll retries — advancing it optimistically
+-- before the refresh silently stranded the cache on obsolete global indices.
+local deviceSig = ""
+local function deviceSignature()
+  local ids = {}
+  for _, d in ipairs(hs.audiodevice.allInputDevices()) do
+    ids[#ids + 1] = d:uid() or d:name()
+  end
+  table.sort(ids)
+  return table.concat(ids, "|")
+end
+
 local function parseDeviceList(stderr)
   local devs, inAudio = {}, false
   for line in stderr:gmatch("[^\n]+") do
@@ -128,6 +142,9 @@ local function refreshDevices()
     if #devs > 0 then
       deviceCache = devs
       warnedMissing = {}
+      -- sole writer, and ONLY on success: updating on a failed enumeration
+      -- would strand the stale cache exactly like the original race
+      deviceSig = deviceSignature()
     end
   end, { "-hide_banner", "-f", "avfoundation", "-list_devices", "true", "-i", "" })
   if not t:start() then enumerating = false end -- else a failed launch blocks refreshes forever
@@ -135,18 +152,9 @@ end
 
 -- Device hot-plug detection WITHOUT owning the hs.audiodevice.watcher
 -- singleton (setting its callback destroys any handler an existing config
--- registered — undetectably when theirs was set but not started). Poll a
--- cheap CoreAudio device signature (~0.04ms) and run the real ffmpeg
--- enumeration only when it changes.
-local deviceSig = ""
-local function deviceSignature()
-  local ids = {}
-  for _, d in ipairs(hs.audiodevice.allInputDevices()) do
-    ids[#ids + 1] = d:uid() or d:name()
-  end
-  table.sort(ids)
-  return table.concat(ids, "|")
-end
+-- registered — undetectably when theirs was set but not started). Poll the
+-- cheap signature (defined above refreshDevices, which owns its updates) and
+-- run the real ffmpeg enumeration only when it changes.
 -- Ordinal labels "(1)/(2)" reflect enumeration order, not physical identity,
 -- and no cross-API identity exists (ffmpeg exposes no UIDs; CoreAudio and
 -- AVFoundation demonstrably order devices differently). What IS observable is
@@ -206,11 +214,9 @@ local function checkCalibrationIdentity()
 end
 
 local deviceWatch = hs.timer.doEvery(2, function()
-  local sig = deviceSignature()
-  if sig ~= deviceSig then
-    deviceSig = sig
-    refreshDevices()
-    checkCalibrationIdentity()
+  if deviceSignature() ~= deviceSig then
+    refreshDevices() -- completion updates deviceSig; if the busy-guard drops
+    checkCalibrationIdentity() -- this call, the stale signature retries in 2s
   end
 end)
 
@@ -906,8 +912,7 @@ end)
 -- (crash hygiene — stray-recorder pkill + WAV removal — runs at the TOP of
 -- this file, before the hotkey validation gate, so a config error can never
 -- skip it)
-refreshDevices()
-deviceSig = deviceSignature() -- baseline so the poll doesn't fire a redundant refresh
+refreshDevices() -- its completion sets the deviceSig baseline
 checkCalibrationIdentity()
 startServer()
 menubar:setMenu(buildMenu)
