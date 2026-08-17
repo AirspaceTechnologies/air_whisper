@@ -269,6 +269,19 @@ local function resolveDevice()
   if d then return d, "config-default" end
   local sys = hs.audiodevice.defaultInputDevice()
   if sys then
+    -- recording from a Bluetooth headset's mic drops its OUTPUT to
+    -- call-quality HFP (music turns distorted); when merely falling back,
+    -- prefer a built-in mic over a Bluetooth default. Explicit user choices
+    -- (menu / screen map / config) are honored as-is above.
+    local tt = tostring(sys:transportType() or "")
+    if tt:lower():find("blue") then
+      for _, dev in ipairs(hs.audiodevice.allInputDevices()) do
+        if tostring(dev:transportType() or "") == "Built-in" then
+          local builtin = findByName(dev:name())
+          if builtin then return builtin, "system-default(built-in preferred over Bluetooth)" end
+        end
+      end
+    end
     d = findByName(sys:name())
     if d then return d, "system-default" end
   end
@@ -332,6 +345,11 @@ end
 -- globals
 local recTask
 local cliTask
+-- forward declarations for the menu's status rows (the menu section precedes
+-- the server section; without these the references compile as nil globals)
+local serverTask
+local serverReady = false -- set only after the HTTP probe AND ownership check pass
+local serverPort = config.server_port -- actual bound port; re-picked per launch
 
 -- Disarm-then-kill for the CLI transcriber: nil FIRST so its identity-guarded
 -- callback no-ops instead of pasting a stale transcript after a reset
@@ -380,8 +398,23 @@ local function screensWithLabels()
   return out
 end
 
+-- Read-only health rows at the top of the menu: "is it working?" answered
+-- without a terminal.
+local function statusRows()
+  local rows = {}
+  local function row(ok, label)
+    rows[#rows + 1] = { title = (ok and "✓ " or "✗ ") .. label, disabled = true }
+  end
+  row(hs.accessibilityState(), "accessibility (lets it type for you)")
+  row(hs.microphoneState() == true, "microphone permission")
+  row(serverReady, "transcription server" .. (serverReady and (" · port " .. serverPort) or ""))
+  row(hs.fs.attributes(config.model_path) ~= nil, "model on disk")
+  return rows
+end
+
 local function buildMenu()
-  local items = {}
+  local items = statusRows()
+  table.insert(items, { title = "-" })
   table.insert(items, {
     title = "Auto — follow focused screen",
     checked = (micMode == "auto"),
@@ -440,9 +473,8 @@ end
 
 -- ---------------------------------------------------------------- whisper-server
 
-local serverTask = nil
-local serverReady = false -- set only after the HTTP probe AND ownership check pass
-local serverPort = config.server_port -- actual bound port; re-picked per launch
+-- serverTask / serverReady / serverPort are declared in the forward block
+-- above safely() so the menu's status rows can see them
 local portRerolls = 0
 
 local function serverUrl(path)
@@ -647,6 +679,10 @@ local function handleTranscript(raw)
   local text = cleanText(raw)
   if text then
     insertText(text)
+    if not hs.settings.get("dictate.first_success") then
+      hs.settings.set("dictate.first_success", true)
+      hs.alert.show("🎉 First dictation complete — you're all set. Mic options live in the 🎤 menu.", 5)
+    end
   else
     log("empty/blocklisted transcript, nothing inserted")
   end
@@ -918,6 +954,47 @@ local stuckGuard = hs.timer.doEvery(15, function()
   end
 end)
 
+-- ---------------------------------------------------------------- onboarding
+
+-- Re-entrant setup wizard: on every load, walk the user through only what is
+-- missing. The two TCC grants require human clicks by Apple design — our job
+-- is to fire the right prompt at the right moment with one line of why, then
+-- continue automatically (including the restart Accessibility needs).
+local onboardTimer = nil
+local function onboard()
+  -- Globe key → "Do Nothing", set programmatically once (harmless if already
+  -- set via the UI; documented to take effect at next login at the latest)
+  if config.hotkey == "fn" and not hs.settings.get("dictate.globe_configured") then
+    hs.execute("/usr/bin/defaults write com.apple.HIToolbox AppleFnUsageType -int 0")
+    hs.settings.set("dictate.globe_configured", true)
+    log("Globe key configured to Do Nothing")
+  end
+  if not hs.accessibilityState() then
+    hs.dialog.blockAlert("Dictation setup — step 1 of 2",
+      "macOS needs your OK for dictation to type text at your cursor.\n\n"
+      .. "Click OK, then enable Hammerspoon in the list that opens — I'll take it from there.",
+      "OK")
+    hs.accessibilityState(true) -- fires the system prompt
+    local waited = 0
+    onboardTimer = hs.timer.doEvery(2, function()
+      waited = waited + 2
+      if hs.accessibilityState() then
+        onboardTimer:stop()
+        hs.alert.show("Accessibility granted — finishing setup…")
+        hs.timer.doAfter(1, hs.reload) -- restart arms the event taps; the wizard resumes at step 2
+      elseif waited >= 600 then
+        onboardTimer:stop() -- give up quietly; next load re-prompts
+      end
+    end)
+    return -- step 2 runs after the post-grant reload
+  end
+  if hs.microphoneState() ~= true then
+    hs.dialog.blockAlert("Dictation setup — step 2 of 2",
+      "macOS needs your OK for the microphone.\n\nClick OK, then Allow.", "OK")
+    hs.microphoneState(true) -- fires the TCC microphone prompt
+  end
+end
+
 -- ---------------------------------------------------------------- init
 
 -- (crash hygiene — stray-recorder pkill + WAV removal — runs at the TOP of
@@ -941,8 +1018,12 @@ hs.shutdownCallback = function()
   pcall(stopServer)
   if type(priorShutdown) == "function" then pcall(priorShutdown) end
 end
+hs.autoLaunch(true) -- survive reboots without the user managing Hammerspoon
+onboard()
 log("dictate.lua loaded; hotkey=" .. config.hotkey .. "; mic_mode=" .. micMode)
-hs.alert.show("Dictation ready — hold " .. config.hotkey .. " to talk")
+if hs.accessibilityState() then
+  hs.alert.show("Dictation ready — hold " .. config.hotkey .. " to talk")
+end
 
 -- keep references alive (Hammerspoon GC collects unanchored taps/timers/menubars);
 -- debug() dumps mic state for troubleshooting via `hs -c`.
@@ -952,6 +1033,8 @@ return {
   menubar = menubar,
   stuckGuard = stuckGuard,
   deviceWatch = deviceWatch,
+  onboardTimer = function() return onboardTimer end, -- anchored via closure
+  menu = function() return buildMenu() end, -- lets `hs -c` verify the menu builds
   debug = function()
     return hs.inspect({ mode = micMode, fixed = fixedLabel, map = screenMap,
                         state = state, serverReady = serverReady,

@@ -2,34 +2,27 @@
 
 **Totally private, totally local, and totally free!**
 
-Hold a key, talk, release — the transcript lands at your cursor in whatever app is frontmost. Everything runs on-device (whisper.cpp on Apple Silicon, with the **small.en** model by default); after setup the tool makes **zero network requests** beyond HTTP to `127.0.0.1`.
+Hold **fn**, talk, release — your words land at the cursor in whatever app is frontmost. Whisper runs entirely on your Mac (small.en by default): audio never touches the network, there are no accounts, and nothing to pay for. What Wispr Flow charges $144/year for, auditable in one Lua file.
 
-## Install
+## Install (60 seconds + two clicks)
 
 ```
 git clone git@github.com:AirspaceTechnologies/air_whisper.git && cd air_whisper && ./setup.sh
 ```
 
+Setup asks **nothing**. When Hammerspoon launches, it walks you through the only two things Apple requires a human to click — the Accessibility and Microphone permissions — then configures everything else itself: Globe-key behavior, launch-at-login, mic selection, status readout in the 🎤 menu. Dictate once and it congratulates you; you're done.
+
 Add `--with-medium` to also download the larger `medium.en` model (~1.5 GB). Requires **whisper-cpp ≥ 1.8.5** — setup.sh checks Homebrew's installed version and tells you to `brew upgrade whisper-cpp` if it's older. Self-built (non-Homebrew) binaries can't be version-verified; if you've verified yours, run `DICTATE_SKIP_VERSION_CHECK=1 ./setup.sh`.
 
 **Note for existing Hammerspoon users:** setup appends `require("dictate")` to your `init.lua` without touching the rest. dictate.lua does not take ownership of any Hammerspoon singleton: device hot-plug is detected by a cheap 2-second signature poll (your `hs.audiodevice.watcher` handler, if any, is untouched), and an existing `hs.shutdownCallback` is preserved and chained.
 
-## Permissions (required, manual)
+## Permissions (the two clicks)
 
-macOS will not let a script grant these. After `setup.sh`:
+macOS requires a human to grant these — no script can. The built-in setup wizard fires each prompt at the right moment and continues automatically once you click (including the restart Accessibility needs). For reference, they live at **System Settings → Privacy & Security → Accessibility / Microphone → Hammerspoon**; on recent macOS you may additionally be prompted for **Input Monitoring** — grant it.
 
-1. **System Settings → Privacy & Security → Microphone** → enable **Hammerspoon**
-2. **System Settings → Privacy & Security → Accessibility** → enable **Hammerspoon**
-   - On recent macOS you may additionally be prompted for **Input Monitoring** — grant it.
-3. **Restart Hammerspoon** after granting (permissions only take effect on restart).
+## Globe key
 
-## Globe key setup
-
-The default push-to-talk key is **fn (Globe)**, held alone. macOS binds that key to its own action by default, so set:
-
-**System Settings → Keyboard → "Press 🌐 key to" → Do Nothing**
-
-— otherwise every dictation also opens the emoji picker or Apple's own Dictation.
+The push-to-talk key is **fn (Globe)**, held alone. macOS binds that key to its own action by default; the wizard sets it to "Do Nothing" for you. If the emoji picker ever pops on fn anyway, log out and back in once, or set it manually: System Settings → Keyboard → "Press 🌐 key to" → Do Nothing.
 
 ## Usage
 
@@ -85,7 +78,8 @@ Tip: enable **"Launch Hammerspoon at login"** in Hammerspoon's preferences so th
 | Wrong display's mic in auto mode | Swap the pairing: re-run `./calibrate.sh` or 🎤 menu → Assign screen mics |
 | Slow transcription | Switch back to small.en |
 | First dictation after a reload fails | whisper-server still warming up — it auto-retries once; just dictate again |
-| Emoji picker pops up | System Settings → Keyboard → "Press 🌐 key to" → Do Nothing |
+| Emoji picker pops up | Log out/in once (the wizard's Globe-key setting needs it on some systems), or set System Settings → Keyboard → "Press 🌐 key to" → Do Nothing |
+| Headphone audio turns distorted during dictation | The recording used your Bluetooth headset's mic, which drops its output to call quality. The automatic fallback already prefers built-in mics; if you assigned the headset yourself, pin a desk or built-in mic in the 🎤 menu instead |
 
 ## Privacy
 

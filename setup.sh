@@ -91,14 +91,12 @@ if (( WITH_MEDIUM )); then download_model "ggml-medium.en.bin" "$MEDIUM_MIN_BYTE
 if [[ -f "$DICTATE_DIR/config.lua" ]]; then
   bold "Config exists — leaving $DICTATE_DIR/config.lua untouched."
 else
-  bold "Choose a fallback microphone (auto/fixed choices live in the menu later)."
-  echo "Current audio input devices:"
-  "$FFMPEG_BIN" -f avfoundation -list_devices true -i "" 2>&1 \
-    | sed -n '/AVFoundation audio devices:/,$p' | grep -E '\[[0-9]+\]' \
-    | sed -E 's/^\[[^]]*\] //' || true
-  printf '\n'
-  read -rp "Fallback mic NAME [MacBook Pro Microphone]: " MIC_NAME || true
+  # zero questions: default the fallback mic to the system's current default
+  # input — every later change happens live in the 🎤 menu, never here
+  MIC_NAME="$(system_profiler SPAudioDataType 2>/dev/null \
+    | awk '/^        [A-Za-z0-9].*:$/{name=$0} /Default Input Device: Yes/{gsub(/^ +|:$/,"",name); print name; exit}' || true)"
   MIC_NAME="${MIC_NAME:-MacBook Pro Microphone}"
+  bold "Fallback microphone: $MIC_NAME (change anytime from the 🎤 menu)"
   # bash literal substitution, NOT sed: a mic name containing & | \ or "
   # corrupted the config via sed metacharacters — or truncated it to 0 bytes
   # when sed failed after the redirect had already emptied the file. Only Lua
@@ -148,19 +146,14 @@ else
   open -a Hammerspoon || true
 fi
 
-# ---------------------------------------------------------------- 6. Manual steps
-bold "Done. Two permissions + one keyboard setting need YOU (macOS won't script them):"
+# ---------------------------------------------------------------- 6. Done
+bold "Done. Hammerspoon is launching and will walk you through the two permission
+clicks macOS requires (Accessibility, then Microphone)."
 cat <<'EOF'
-  1. System Settings → Privacy & Security → Microphone     → enable Hammerspoon
-  2. System Settings → Privacy & Security → Accessibility  → enable Hammerspoon
-     (if macOS also prompts for Input Monitoring, grant that too)
-  3. System Settings → Keyboard → "Press 🌐 key to" → Do Nothing
-     (otherwise the fn key also triggers the emoji picker / Apple Dictation)
+Everything else is automatic: Globe-key behavior, launch-at-login, mic
+selection, and a live status readout in the 🎤 menu bar icon.
 
-Restart Hammerspoon after granting permissions.
-
-Then: hold fn anywhere, speak, release. Text lands at your cursor.
-Mic selection lives in the 🎤 menu bar icon.
-Two same-model displays with built-in mics? Run ./calibrate.sh to pair
-each screen with its own microphone automatically.
+Then just hold fn anywhere, speak, release — text lands at your cursor.
+Two same-model displays with built-in mics? Run ./calibrate.sh once to pair
+each screen with its own microphone.
 EOF
