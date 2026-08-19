@@ -679,6 +679,7 @@ local function handleTranscript(raw)
   local text = cleanText(raw)
   if text then
     insertText(text)
+    log(string.format("inserted %d chars", #text)) -- count only, never content
     if not hs.settings.get("dictate.first_success") then
       hs.settings.set("dictate.first_success", true)
       hs.alert.show("🎉 First dictation complete — you're all set. Mic options live in the 🎤 menu.", 5)
@@ -797,6 +798,7 @@ end
 recTask = nil -- declared above safely(), which kills it on error recovery
 local holdStart = 0
 local canceled = false
+local stopRequested = false -- distinguishes "user released the key" from "ffmpeg died on its own"
 local watchdog = nil
 local pttDown = false
 local flagsTap -- assigned in the hotkey section; the watchdog re-enables it
@@ -809,8 +811,20 @@ local function onRecordingDone(code, _, err)
   if growTimer then growTimer:stop() growTimer = nil end
   stopWatchdog()
   local heldFor = hs.timer.secondsSinceEpoch() - holdStart
-  if canceled or heldFor < config.min_duration_s then
-    finishRun() -- silent discard
+  if canceled then
+    finishRun() -- deliberate cancel: silent by design
+    return
+  end
+  if heldFor < config.min_duration_s then
+    if stopRequested then
+      finishRun() -- genuine short tap: silent by design
+    else
+      -- ffmpeg exited on its own almost immediately — a device failure, not a
+      -- short tap. This exact case used to take the silent path, producing
+      -- "no error, no text, no log line" during mic-subsystem flakes.
+      failRun("recorder died at start (mic trouble?)",
+              "ffmpeg exit " .. tostring(code) .. " | " .. (err or ""):sub(-500))
+    end
     return
   end
   local attr = hs.fs.attributes(WAV)
@@ -840,6 +854,7 @@ end
 
 local function stopRecording()
   if state ~= "recording" or canceled then return end
+  stopRequested = true
   interruptRecorder()
 end
 
@@ -858,6 +873,7 @@ local function startRecording()
   end
   currentMicLabel = dev.label
   canceled = false
+  stopRequested = false
   holdStart = hs.timer.secondsSinceEpoch()
   os.remove(WAV)
   -- -nostats/-loglevel error: ffmpeg must NOT chatter on stderr. If Hammerspoon
