@@ -345,6 +345,7 @@ end
 -- globals
 local recTask
 local cliTask
+local sigkillEscalated = false -- recorder had to be SIGKILLed (mic stall); read in handleTranscript
 -- forward declarations for the menu's status rows (the menu section precedes
 -- the server section; without these the references compile as nil globals)
 local serverTask
@@ -685,6 +686,9 @@ local function handleTranscript(raw)
       hs.alert.show("🎉 First dictation complete — you're all set. Mic options live in the 🎤 menu.", 5)
     end
   else
+    if sigkillEscalated then
+      hs.alert.show("Dictation: the mic stalled mid-recording — try again, or switch mics in the 🎤 menu", 4)
+    end
     log("empty/blocklisted transcript, nothing inserted")
   end
   finishRun()
@@ -847,6 +851,7 @@ local function interruptRecorder()
   hs.timer.doAfter(3, function()
     if t:isRunning() then
       log("recorder ignored SIGINT for 3s — sending SIGKILL")
+      sigkillEscalated = true -- classic mid-recording mic stall; surfaced to the user if the take is empty
       killTask(t)
     end
   end)
@@ -874,6 +879,7 @@ local function startRecording()
   currentMicLabel = dev.label
   canceled = false
   stopRequested = false
+  sigkillEscalated = false
   holdStart = hs.timer.secondsSinceEpoch()
   os.remove(WAV)
   -- -nostats/-loglevel error: ffmpeg must NOT chatter on stderr. If Hammerspoon
@@ -901,13 +907,31 @@ local function startRecording()
   end
   setState("recording")
   log(string.format("recording via %s [%d] (%s)", dev.label, dev.globalIndex, how))
-  -- flip the pill to "Listening" once audio bytes are actually flowing
-  -- (the device takes ~0.3-0.7s to open; speaking before that is clipped)
+  -- One timer, two jobs: flip the pill once audio actually flows (device open
+  -- takes ~0.3-0.7s; speaking before that is clipped), then keep watching for
+  -- MID-RECORDING STALLS — the Studio Display mics intermittently stop
+  -- delivering frames, ffmpeg blocks, and without this the user just sees a
+  -- take silently produce nothing. PCM grows continuously even in silence, so
+  -- no-growth genuinely means a dead mic, not a quiet speaker.
+  local flipped, stallWarned = false, false
+  local lastSize, lastGrowthAt = 0, hs.timer.secondsSinceEpoch()
   growTimer = hs.timer.doEvery(0.025, function()
     local a = hs.fs.attributes(WAV)
-    if a and a.size and a.size > 1024 then
-      setPillText("🎤 " .. (currentMicLabel or "Mic") .. " — listening…")
-      if growTimer then growTimer:stop() growTimer = nil end
+    local size = (a and a.size) or 0
+    local now = hs.timer.secondsSinceEpoch()
+    if size > lastSize then
+      lastSize, lastGrowthAt = size, now
+      if not flipped and size > 1024 then
+        flipped = true
+        setPillText("🎤 " .. (currentMicLabel or "Mic") .. " — listening…")
+      elseif stallWarned then
+        stallWarned = false -- mic recovered; un-warn
+        setPillText("🎤 " .. (currentMicLabel or "Mic") .. " — listening…")
+      end
+    elseif state == "recording" and not stallWarned and (now - lastGrowthAt) > 2.5 then
+      stallWarned = true
+      setPillText("⚠️ mic stalled — release and try again")
+      log("mic stall detected while recording (" .. tostring(currentMicLabel) .. ")")
     end
   end)
   -- watchdog: a flagsChanged keyup can be lost (event tap disabled by a
