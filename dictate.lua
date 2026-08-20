@@ -63,6 +63,22 @@ local function killTask(task)
   end
 end
 
+-- One-shot timers MUST be anchored: Hammerspoon garbage-collects an
+-- hs.timer.doAfter object nothing references, and a collected timer never
+-- fires (observed in the wild: the recorder's 3s SIGKILL escalation vanished,
+-- leaving a stalled ffmpeg holding the mic). Every one-shot goes through
+-- after(), which anchors the timer until it has fired.
+local pendingTimers = {}
+local function after(seconds, fn)
+  local t
+  t = hs.timer.doAfter(seconds, function()
+    pendingTimers[t] = nil
+    fn()
+  end)
+  pendingTimers[t] = true
+  return t
+end
+
 -- Fail CLOSED on an invalid hotkey: silently falling back to fn would arm the
 -- microphone on a key the user never chose, while the ready alert displayed
 -- the value they typed. No hotkey, no dictation, loud message.
@@ -534,7 +550,7 @@ local function probeServer(owner, deadline)
     if code == 0 and out == "200" then
       verifyOwnership(owner)
     elseif hs.timer.secondsSinceEpoch() < deadline then
-      hs.timer.doAfter(0.5, function() probeServer(owner, deadline) end)
+      after(0.5, function() probeServer(owner, deadline) end)
     else
       log("whisper-server never became ready on port " .. serverPort)
     end
@@ -640,7 +656,7 @@ local function insertText(text)
     -- restore the previous pasteboard (all types, so images survive) — but
     -- only while it still holds OUR transcript: if anything copied since
     -- (changeCount moved), restoring would destroy that newer value
-    hs.timer.doAfter(config.restore_delay_ms / 1000, function()
+    after(config.restore_delay_ms / 1000, function()
       pcall(function()
         if hs.pasteboard.changeCount() ~= ours then return end
         -- content check backs up changeCount: a writer landing in the
@@ -688,8 +704,25 @@ local function handleTranscript(raw)
   else
     if sigkillEscalated then
       hs.alert.show("Dictation: the mic stalled mid-recording — try again, or switch mics in the 🎤 menu", 4)
+      log("empty/blocklisted transcript after a mic stall, nothing inserted")
+    else
+      -- Distinguish "you said nothing" from "the mic delivered silence" —
+      -- observed takes that complete normally but carry dead audio. The WAV
+      -- lives ~0.2s longer for the measurement; finishRun then deletes it.
+      local t = hs.task.new(config.ffmpeg_bin, safely(function(_, _, stderr)
+        local mean = tonumber((stderr or ""):match("mean_volume:%s*(-?%d+%.?%d*)"))
+        if mean and mean < -50 then
+          hs.alert.show("Dictation: the mic delivered silence — mic trouble? The 🎤 menu can switch mics", 4)
+          log(string.format("empty transcript with SILENT audio (mean %.1f dB) — probable mic fault", mean))
+        else
+          log("empty/blocklisted transcript, nothing inserted"
+              .. (mean and string.format(" (level %.1f dB)", mean) or ""))
+        end
+        finishRun()
+      end, "level-check"), { "-hide_banner", "-i", WAV, "-af", "volumedetect", "-f", "null", "-" })
+      if t:start() then return end -- finishRun happens in the level-check callback
+      log("empty/blocklisted transcript, nothing inserted (level check failed to launch)")
     end
-    log("empty/blocklisted transcript, nothing inserted")
   end
   finishRun()
 end
@@ -715,7 +748,7 @@ local function waitForReady(wav, deadline, isRetry)
     return failRun("transcription server unavailable",
                    "not ready on port " .. serverPort)
   end
-  hs.timer.doAfter(0.5, function() waitForReady(wav, deadline, isRetry) end)
+  after(0.5, function() waitForReady(wav, deadline, isRetry) end)
 end
 
 local function transcribeCli(wav)
@@ -734,7 +767,7 @@ local function transcribeCli(wav)
   end
   -- bounded: an unwedged run finishes in seconds; without a cap a wedged CLI
   -- would outlive the stuck guard's reset and paste stale text much later
-  hs.timer.doAfter(90, function()
+  after(90, function()
     if cliTask == thisTask and thisTask:isRunning() then
       log("whisper-cli timed out after 90s — killing")
       killTask(thisTask) -- callback still identity-matches and runs failRun
@@ -848,7 +881,7 @@ local function interruptRecorder()
   if not (recTask and recTask:isRunning()) then return end
   recTask:interrupt()
   local t = recTask
-  hs.timer.doAfter(3, function()
+  after(3, function()
     if t:isRunning() then
       log("recorder ignored SIGINT for 3s — sending SIGKILL")
       sigkillEscalated = true -- classic mid-recording mic stall; surfaced to the user if the take is empty
@@ -1021,7 +1054,7 @@ local function onboard()
       if hs.accessibilityState() then
         onboardTimer:stop()
         hs.alert.show("Accessibility granted — finishing setup…")
-        hs.timer.doAfter(1, hs.reload) -- restart arms the event taps; the wizard resumes at step 2
+        after(1, hs.reload) -- restart arms the event taps; the wizard resumes at step 2
       elseif waited >= 600 then
         onboardTimer:stop() -- give up quietly; next load re-prompts
       end
