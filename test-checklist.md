@@ -1,6 +1,6 @@
 # Swift manual QA checklist
 
-Run `make all` for automated checks. Items below remain unverified until tested by a person on real hardware.
+Run `make all` for automated checks. Checked items record user-confirmed results on the development Mac; unchecked items still need manual validation.
 
 ## Installation
 
@@ -10,13 +10,15 @@ Run `make all` for automated checks. Items below remain unverified until tested 
 - [ ] Download Small English; cancel/retry download, then dictate offline.
 - [ ] Select an existing official model; reject a corrupt/truncated file clearly.
 - [ ] Verify legacy model reuse without redownloading.
-- [ ] Replace an installed ad hoc build and check permission persistence.
+- [x] Replace installed 0.1.0 with 0.1.2 on the development Mac: Accessibility required reauthorization; dictation worked after recovery.
+- [ ] Repeat an app update and permission checks on a second company Mac.
 - [ ] Toggle launch at login and verify after login from the installed app.
 
 ## Dictation and keyboard
 
 - [ ] Disable the old Hammerspoon dictation module before testing.
 - [ ] Dictate into TextEdit, VS Code, Terminal and a browser text field.
+- [x] Basic dictation insertion in Slack desktop 4.50.143 with Air Whisper 0.1.2, confirmed by the user after restoring Accessibility access.
 - [ ] Start Slack before and after Air Whisper, focus its message editor, wait a couple of seconds, and verify dictation inserts there without sending the message.
 - [ ] Start dictation immediately after first activating Slack; if the field is unavailable, confirm the transcript can still be copied and a later dictation inserts normally.
 - [ ] While transcribing in Slack, move from the message editor to search or a different composer; confirm automatic insertion is refused.

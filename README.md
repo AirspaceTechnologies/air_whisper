@@ -26,6 +26,17 @@ Updates are installed manually; the app has no automatic updater.
 
 Replacing the app preserves downloaded models and settings because they are stored outside the app bundle. If the new build causes trouble, quit it and replace it with the previous app from your saved ZIP, then reopen and check permissions. Before rolling back across a future version that changes stored settings, check that release's compatibility notes.
 
+### Accessibility still asks for access after an update
+
+An ad hoc signed update can require a new Accessibility grant because macOS identifies the changed build separately. The old **Air Whisper** entry can still look enabled while the new app has no access. [Apple explains how code identity affects privacy permissions](https://developer.apple.com/documentation/technotes/tn3127-inside-code-signing-requirements).
+
+1. Choose **microphone menu → Quit Air Whisper**.
+2. Open **System Settings → Privacy & Security → Accessibility**. Select only **Air Whisper** and click **−** to remove its old entry.
+3. Click **+**, select your installed **Air Whisper.app** in **Applications** or `~/Applications`, and enable its switch. Choose the same copy you normally open.
+4. Reopen that installed app and check that Accessibility is granted in its Settings, then try dictating again.
+
+This refreshes Air Whisper's Accessibility permission and preserves your models and settings.
+
 ## Use
 
 - Hold the configured key. Wait for **Listening** before speaking; the floating indicator changes only after actual audio arrives.
