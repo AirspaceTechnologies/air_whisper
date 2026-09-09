@@ -56,6 +56,8 @@ dist/Air-Whisper.zip
 dist/SHA256SUMS
 ```
 
+The dependency ZIP is retained in `Vendor/`. Every bootstrap verifies that ZIP again and extracts a fresh framework before building, so changes to an old extracted copy cannot enter the next build. A valid cached ZIP works offline. If a cached ZIP fails verification, the build stops; remove the named ZIP and rerun to download a fresh copy. Older checkouts that only cached an extracted framework need one new download.
+
 Build on Apple Silicon for the supported initial release; the executable targets the build machine's architecture. Model files are downloaded separately, not included in the ZIP. Building does not install or launch the app, modify Hammerspoon, or access the microphone.
 
 ```sh

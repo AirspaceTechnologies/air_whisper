@@ -1,4 +1,4 @@
-.PHONY: all bootstrap build test app clean
+.PHONY: all bootstrap build test test-bootstrap app clean
 
 # Both tests and app packaging use the same SwiftPM build and vendored framework.
 .NOTPARALLEL:
@@ -11,7 +11,10 @@ bootstrap:
 build: bootstrap
 	./scripts/swift.sh build
 
-test: bootstrap
+test-bootstrap:
+	./scripts/test-bootstrap-whisper.sh
+
+test: test-bootstrap bootstrap
 	./scripts/swift.sh test
 
 app:

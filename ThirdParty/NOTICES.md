@@ -14,7 +14,7 @@ The corresponding semantic tag is v1.9.3, currently marked as a prerelease upstr
 
 The macOS framework requires macOS 13.3 or later, contains arm64 and x86_64 slices, uses Metal and Accelerate, and links only to Apple system libraries. Air Whisper's initial app build targets Apple Silicon. It probes Metal buffer allocation before model loading and falls back to CPU inference when the host denies GPU access. No Homebrew library paths or external speech executables are required. The framework must be copied intact into `Contents/Frameworks` and signed with the same ad hoc signing process as the application. The official archive includes the Metal implementation in the framework; no runtime compiler tools are needed.
 
-Run `./scripts/bootstrap-whisper.sh` before building a fresh checkout. The script verifies the archive before extracting it into the ignored `Vendor` directory.
+Run `./scripts/bootstrap-whisper.sh` before building a fresh checkout. The script retains `Vendor/whisper-b4938-xcframework.zip` and verifies a temporary copy against the pinned archive SHA-256 on every invocation. It always regenerates the extracted framework from those verified bytes, replacing any changes to an older extracted copy. The old `whisper.sha256` stamp is not trusted. A valid cached archive works offline; a corrupt cached archive stops the build before replacing the existing framework and must be removed before retrying the download.
 
 ## OpenAI Whisper models
 
