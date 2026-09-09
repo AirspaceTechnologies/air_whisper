@@ -1,0 +1,22 @@
+# Swift build validation
+
+Verified on 2026-09-09 using an Apple Silicon Mac, macOS 26.5.1, Xcode's Swift 6.3.3 toolchain. The app's deployment target is macOS 13.3; older supported OS versions and other machines still need manual validation.
+
+## Completed
+
+- `APP_VERSION=0.1.1 APP_BUILD=2 make -j2 all` passed from the PR worktree with the optional integration-test model/fixture environment variables set: all 43 tests passed, zero failures or skips, followed by successful release packaging. Shared SwiftPM/framework build steps remain serialized even when make is invoked with parallel jobs.
+- The real-model integration test used the verified existing small.en model and upstream JFK fixture. It checks expected phrases, silence suppression, cancellation/recovery, and canceled-unload handling while reusing a loaded context. This test is skipped by default when local model/fixture paths are not supplied; the other 42 tests need no model.
+- Named-pasteboard tests passed outside the restricted command sandbox. They preserve multiple items/binary types and confirm ownership-generation behavior. The user's normal clipboard was not accessed.
+- Release app and embedded framework passed `codesign --verify --deep --strict`. The bundle is ad hoc signed, with no TeamIdentifier or developer account.
+- Removed the build machine's Xcode toolchain library search path from the shipped executable. Remaining paths resolve OS libraries and the bundled framework.
+- Verified `SHA256SUMS`, extracted the release ZIP into a separate temporary folder, and ran `scripts/verify-app.sh` against that copy. It confirmed version 0.1.1 (build 2), signatures, bundle metadata, portable dependencies and `--self-check`. Real file transcription with an expected-phrase assertion also passed: the 11-second fixture produced 108 cleaned characters; speech content was not printed.
+- Metal inference passed outside the tool sandbox. The CPU fallback passed inside the restricted environment where Metal buffer allocation is unavailable.
+- Bundle metadata, shell syntax and whitespace checks passed. Invalid version/build overrides were rejected before bootstrap/build. Generated app icon was visually inspected.
+
+Artifacts: `dist/Air Whisper.app`, `dist/Air-Whisper.zip`, and `dist/SHA256SUMS`. Models are not bundled. Packaging generates the checksum for each build; rebuilt ZIPs can have different hashes.
+
+## Still requires a person
+
+Automated build validation did not capture live microphone input or type into another application. The user subsequently reported that the native app works well in hands-on use; this is a basic smoke check, not completion of the full hardware matrix. Use `test-checklist.md` for Studio Display assignments, device removal, lock/sleep, login registration, permission persistence across updates, and installation on a second company Mac.
+
+Disable the old Hammerspoon dictation module before testing the Swift app with the same hotkey. The legacy implementation and documentation remain in `legacy/`. The app/build does not modify Hammerspoon configuration or relocate legacy models automatically.
