@@ -118,6 +118,8 @@ See [validation results](docs/VALIDATION.md) for the tested build, real inferenc
 
 If the hotkey is inactive, check permissions and try Right Option. For wrong-microphone problems, inspect the display assignment; same-named mics have distinct IDs. For model errors, use a verified official model. Embedded inference supports cooperative cancellation; an underlying native-library/GPU hang can require quitting and reopening the app.
 
+If dictation appears under **Copy Dictation** but is not inserted into Slack, recording and transcription have succeeded. Air Whisper may not have been able to identify the focused text field when recording began. It requests accessibility support automatically from apps that provide it, including Slack. After opening or switching to Slack, click the message editor and give it a couple of seconds before the first dictation. Copy any waiting transcript from the menu, then try again. Air Whisper keeps the original destination check even if a field becomes available later; changing microphones or insertion mode does not bypass that check.
+
 ## Migrating from Lua
 
 The original prototype is preserved in [legacy/](legacy/README.md); its installer is `./legacy/setup.sh`.

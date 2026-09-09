@@ -47,6 +47,7 @@ final class AppController: ObservableObject {
     private let transcriber = WhisperTranscriber()
     private let keyboard = KeyboardMonitor()
     private let insertion = TextInsertion()
+    private let accessibilityPreparation = AccessibilityPreparation()
     private let overlay = DictationOverlay()
     private var displayOverlays: [DictationOverlay] = []
     private var displayOverlayTask: Task<Void, Never>?
@@ -126,12 +127,19 @@ final class AppController: ObservableObject {
 
     func refreshPermissions() {
         microphoneAuthorized = AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
+        let hadAccessibilityAccess = accessibilityAuthorized
         accessibilityAuthorized = AXIsProcessTrusted()
         monitoringAuthorized = CGPreflightListenEventAccess()
+        if accessibilityAuthorized && !hadAccessibilityAccess { prepareFocusedApplication() }
         if !microphoneAuthorized || !accessibilityAuthorized {
             if isBusy { cancelSession(message: "A required permission was removed. Open Settings to restore access.") }
         }
         updateKeyboardMonitor()
+    }
+
+    private func prepareFocusedApplication() {
+        guard !quitting, !suspended else { return }
+        accessibilityPreparation.prepareFrontmostApplication()
     }
 
     private func updateKeyboardMonitor(restart: Bool = false) {
@@ -325,6 +333,7 @@ final class AppController: ObservableObject {
         let id = UUID()
         sessionID = id
         startedAt = Date()
+        prepareFocusedApplication()
         insertionTarget = InsertionTarget.capture()
         activeScreen = screen?.screen
         activeMicrophone = DeviceDisplayName.label(for: selected.device, among: devices.devices)
@@ -383,6 +392,7 @@ final class AppController: ObservableObject {
                     self.showNotice("No speech was recognized.", symbol: "waveform")
                     return
                 }
+                let initialFocusUnavailable = self.insertionTarget?.focusedElement == nil
                 let pasted = self.insertionTarget.map {
                     self.insertion.insert(text, target: $0, mode: self.sessionSettings.pasteMode,
                                           restoreDelay: self.sessionSettings.restoreDelay)
@@ -395,7 +405,10 @@ final class AppController: ObservableObject {
                         guard !Task.isCancelled else { return }
                         self?.pendingTranscript = nil
                     }
-                    self.showNotice("Focus changed or insertion was unavailable. Copy dictation from the menu.", symbol: "doc.on.clipboard")
+                    let notice = initialFocusUnavailable
+                        ? "The text field wasn't available when dictation started. Copy from the menu; wait a moment and try again."
+                        : "Focus changed or insertion was unavailable. Copy dictation from the menu."
+                    self.showNotice(notice, symbol: "doc.on.clipboard")
                 }
             } catch {
                 guard self.sessionID == id, !Task.isCancelled else { return }
@@ -476,6 +489,19 @@ final class AppController: ObservableObject {
 
     private func installLifecycleObservers() {
         let workspace = NSWorkspace.shared.notificationCenter
+        notificationTokens.append(workspace.addObserver(
+            forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.prepareFocusedApplication() }
+        })
+        notificationTokens.append(workspace.addObserver(
+            forName: NSWorkspace.didTerminateApplicationNotification, object: nil, queue: .main
+        ) { [weak self] notification in
+            guard let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication else { return }
+            MainActor.assumeIsolated {
+                self?.accessibilityPreparation.forget(processID: app.processIdentifier)
+            }
+        })
         for (name, reason) in [(NSWorkspace.willSleepNotification, SuspensionReason.machineSleep),
                                (NSWorkspace.screensDidSleepNotification, .displaySleep),
                                (NSWorkspace.sessionDidResignActiveNotification, .inactiveSession)] {

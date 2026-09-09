@@ -88,7 +88,11 @@ struct InsertionTarget {
 
     @MainActor
     func isStillFocused() -> Bool {
-        guard let current = Self.capture(), current.processID == processID else { return false }
+        matches(Self.capture())
+    }
+
+    func matches(_ current: InsertionTarget?) -> Bool {
+        guard let current, current.processID == processID else { return false }
         // Unknown focus is intentionally not treated as permission to type into a new field.
         guard let original = focusedElement, let now = current.focusedElement else { return false }
         return CFEqual(original, now)

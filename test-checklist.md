@@ -17,6 +17,9 @@ Run `make all` for automated checks. Items below remain unverified until tested 
 
 - [ ] Disable the old Hammerspoon dictation module before testing.
 - [ ] Dictate into TextEdit, VS Code, Terminal and a browser text field.
+- [ ] Start Slack before and after Air Whisper, focus its message editor, wait a couple of seconds, and verify dictation inserts there without sending the message.
+- [ ] Start dictation immediately after first activating Slack; if the field is unavailable, confirm the transcript can still be copied and a later dictation inserts normally.
+- [ ] While transcribing in Slack, move from the message editor to search or a different composer; confirm automatic insertion is refused.
 - [ ] Starting changes to Listening only after audio arrives.
 - [ ] Release/cancel during startup leaves no open mic.
 - [ ] Short taps insert nothing, a 60-second take works, and the 120-second cap releases the microphone.

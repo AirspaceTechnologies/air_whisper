@@ -31,6 +31,8 @@ Cancellation generations and per-operation deadlines feed native abort callbacks
 
 The app checks session identity again before insertion and compares the focused accessibility element with the original target. If automatic insertion is unavailable, it offers explicit copying of the result and expires the in-memory text after five minutes. Clipboard insertion snapshots all items/types and restores them only while it still owns the temporary clipboard generation. Newer clipboard content is preserved.
 
+On application activation and after Accessibility permission is available, Air Whisper requests `AXManualAccessibility` from apps that support it. This exposes Electron text fields without requiring VoiceOver. Preparation is remembered per process lifetime so repeated checks do not restart Electron's delayed accessibility activation. The original field must still be known when dictation begins: a later-discovered field is never substituted into a running session.
+
 ## Distribution and updates
 
 `make all` runs tests, builds the release executable, embeds the framework/licenses, sets version metadata, removes development-tool search paths, ad hoc signs, verifies the bundle and packages `Air-Whisper.zip` with `SHA256SUMS`. `APP_VERSION` and `APP_BUILD` optionally override the source defaults for a release.
