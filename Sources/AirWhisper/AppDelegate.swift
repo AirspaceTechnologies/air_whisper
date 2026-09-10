@@ -83,7 +83,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc private func showSettings() {
         if settingsWindow == nil {
             let content = SettingsView(controller: controller, settings: controller.settings,
-                                       devices: controller.devices, models: controller.models)
+                                       devices: controller.devices, models: controller.models,
+                                       cleanupModels: controller.cleanupModels)
             let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 690, height: 690),
                                   styleMask: [.titled, .closable, .miniaturizable, .resizable],
                                   backing: .buffered, defer: false)

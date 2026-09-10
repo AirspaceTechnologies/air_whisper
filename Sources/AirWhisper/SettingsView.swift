@@ -2,12 +2,14 @@ import SwiftUI
 import AirWhisperCore
 import AirWhisperAudio
 import AirWhisperSpeech
+import AirWhisperLLM
 
 struct SettingsView: View {
     @ObservedObject var controller: AppController
     @ObservedObject var settings: SettingsStore
     @ObservedObject var devices: AudioDeviceManager
     @ObservedObject var models: ModelManager
+    @ObservedObject var cleanupModels: LLMModelManager
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -212,6 +214,39 @@ struct SettingsView: View {
                             Button("Approve in Login Items Settings…") { controller.openLoginSettings() }
                         }
                     }.frame(maxWidth: .infinity, alignment: .leading).padding(8)
+                }
+                GroupBox("AI cleanup") {
+                    VStack(alignment: .leading, spacing: 12) {
+                        Toggle("Clean up dictated text with a local AI model", isOn: Binding(
+                            get: { settings.value.cleanupEnabled },
+                            set: { settings.value.cleanupEnabled = $0; controller.syncCleanupModel() }
+                        )).disabled(controller.isBusy)
+                        Text("Fixes punctuation, capitalization, and filler words after transcription. Runs entirely on this Mac using a small local model; nothing is sent anywhere.")
+                            .font(.callout).foregroundStyle(.secondary)
+                        if settings.value.cleanupEnabled {
+                            if controller.downloadingCleanupModel {
+                                if let progress = cleanupModels.progress { ProgressView(value: progress) }
+                                else { ProgressView().controlSize(.small) }
+                                HStack {
+                                    Text(cleanupModels.status).font(.callout)
+                                    Spacer()
+                                    Button("Cancel Download") { controller.cancelCleanupModelDownload() }
+                                }
+                            } else if controller.preparingCleanupModel {
+                                HStack { ProgressView().controlSize(.small); Text("Verifying and loading cleanup model…") }
+                            } else {
+                                HStack {
+                                    Label(controller.cleanupModelReady ? "Cleanup model ready" : "Cleanup model required",
+                                          systemImage: controller.cleanupModelReady ? "checkmark.circle.fill" : "arrow.down.circle")
+                                        .foregroundStyle(controller.cleanupModelReady ? Color.green : Color.secondary)
+                                    Spacer()
+                                    Button(controller.currentCleanupModelURL == nil ? "Download Cleanup Model" : "Download Again") { controller.downloadCleanupModel() }
+                                }.disabled(controller.isBusy)
+                            }
+                            Text("Qwen2.5 1.5B Instruct · about 1 GB. If cleanup fails for any reason, the original transcript is used instead.")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                    }.padding(8)
                 }
                 Button("Reset Dictation and Refresh Devices") { controller.reset() }
             }.padding(14)

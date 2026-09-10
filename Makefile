@@ -7,6 +7,7 @@ all: test app
 
 bootstrap:
 	./scripts/bootstrap-whisper.sh
+	./scripts/bootstrap-llama.sh
 
 build: bootstrap
 	./scripts/swift.sh build
