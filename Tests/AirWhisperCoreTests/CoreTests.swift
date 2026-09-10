@@ -60,4 +60,12 @@ final class CoreTests: XCTestCase {
         XCTAssertEqual(PushToTalkKey.rightcmd.rawMask & 0x08, 0) // left Command
         XCTAssertEqual(PushToTalkKey.rightctrl.rawMask & 0x01, 0) // left Control
     }
+
+    func testVocabularyPromptFlattensLinesAndCapsLength() {
+        XCTAssertEqual(VocabularyPrompt.sanitize("Aidan\nKubernetes\nQoder"), "Aidan, Kubernetes, Qoder")
+        XCTAssertEqual(VocabularyPrompt.sanitize("  spaced  "), "spaced")
+        XCTAssertEqual(VocabularyPrompt.sanitize(""), "")
+        let long = String(repeating: "a", count: VocabularyPrompt.maximumLength + 50)
+        XCTAssertEqual(VocabularyPrompt.sanitize(long).count, VocabularyPrompt.maximumLength)
+    }
 }

@@ -117,7 +117,7 @@ private final class WhisperWorker: @unchecked Sendable {
         self.modelURL = url
     }
 
-    func transcribe(_ audio: CapturedAudio, language: String, operation: InferenceOperation) throws -> String {
+    func transcribe(_ audio: CapturedAudio, language: String, initialPrompt: String, operation: InferenceOperation) throws -> String {
         try operation.check()
         try WhisperInput.validate(audio, language: language)
         guard let context else { throw SpeechError.modelNotLoaded }
@@ -146,8 +146,11 @@ private final class WhisperWorker: @unchecked Sendable {
 
         let result: Int32 = "en".withCString { languagePointer in
             parameters.language = languagePointer
-            return audio.samples.withUnsafeBufferPointer { samples in
-                whisper_full(context, parameters, samples.baseAddress, Int32(samples.count))
+            return initialPrompt.withCString { promptPointer -> Int32 in
+                if !initialPrompt.isEmpty { parameters.initial_prompt = promptPointer }
+                return audio.samples.withUnsafeBufferPointer { samples in
+                    whisper_full(context, parameters, samples.baseAddress, Int32(samples.count))
+                }
             }
         }
         try operation.check()
@@ -184,11 +187,11 @@ public actor WhisperTranscriber {
         }
     }
 
-    public func transcribe(_ audio: CapturedAudio, language: String) async throws -> String {
+    public func transcribe(_ audio: CapturedAudio, language: String, initialPrompt: String = "") async throws -> String {
         try Task.checkCancellation()
         let operation = InferenceOperation(cancellation: cancellation, timeout: max(30, min(180, audio.duration * 3)))
         return try await perform(operation: operation) { worker in
-            try worker.transcribe(audio, language: language, operation: operation)
+            try worker.transcribe(audio, language: language, initialPrompt: initialPrompt, operation: operation)
         }
     }
 

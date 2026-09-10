@@ -213,6 +213,17 @@ struct SettingsView: View {
                         }
                     }.frame(maxWidth: .infinity, alignment: .leading).padding(8)
                 }
+                GroupBox("Vocabulary") {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Names, jargon, or product terms whisper.cpp should recognize. Separate entries with commas.")
+                            .font(.callout).foregroundStyle(.secondary)
+                        TextEditor(text: $settings.value.vocabulary)
+                            .font(.body).frame(height: 60)
+                            .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.secondary.opacity(0.3)))
+                        Text("\(VocabularyPrompt.sanitize(settings.value.vocabulary).count)/\(VocabularyPrompt.maximumLength) characters used")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }.padding(8)
+                }
                 Button("Reset Dictation and Refresh Devices") { controller.reset() }
             }.padding(14)
         }

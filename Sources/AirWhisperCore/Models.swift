@@ -85,6 +85,21 @@ public struct DictationSettings: Codable, Equatable, Sendable {
     public var minimumDuration: TimeInterval = 0.5
     public var maximumDuration: TimeInterval = 120
     public var restoreDelay: TimeInterval = 0.3
+    public var vocabulary: String = ""
 
     public init() {}
+}
+
+public enum VocabularyPrompt {
+    /// whisper.cpp's initial_prompt shares the model's limited context window with the
+    /// audio itself. Keep the glossary short so it cannot crowd out the actual speech.
+    public static let maximumLength = 400
+
+    public static func sanitize(_ raw: String) -> String {
+        let flattened = raw
+            .components(separatedBy: .newlines)
+            .joined(separator: ", ")
+            .trimmingCharacters(in: .whitespaces)
+        return String(flattened.prefix(maximumLength))
+    }
 }
