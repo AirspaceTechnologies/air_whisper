@@ -19,6 +19,8 @@ No terminal commands or developer tools are needed for installation. To check a 
 
 Updates are installed manually; the app has no automatic updater.
 
+The microphone menu and Settings header show the running app's version and build, for example **Air Whisper 0.1.4 (5)**. Use these to confirm which copy you opened after an update.
+
 1. Download the newer **Air-Whisper.zip** from Releases or your team's approved shared folder. Keep the previous ZIP if you want an easy rollback.
 2. Choose **microphone menu → Quit Air Whisper**. Closing the Settings window leaves dictation running.
 3. Extract the new ZIP and replace the existing **Air Whisper.app** in the same Applications folder. Keep one installed copy and reopen it from there.
@@ -36,6 +38,8 @@ An ad hoc signed update can require a new Accessibility grant because macOS iden
 4. Reopen that installed app and check that Accessibility is granted in its Settings, then try dictating again.
 
 This refreshes Air Whisper's Accessibility permission and preserves your models and settings.
+
+If Fn does nothing after an update, check Air Whisper's own Settings status. Missing Accessibility access also disables push-to-talk. If Accessibility is granted but the shortcut is still unavailable, check **Privacy & Security → Input Monitoring**, allow the installed Air Whisper app, then quit and reopen it. An enabled-looking macOS entry does not guarantee that the updated build has access.
 
 ## Use
 
@@ -90,7 +94,7 @@ git pull --ff-only
 APP_VERSION=0.1.1 APP_BUILD=2 make all
 ```
 
-`APP_VERSION` sets the displayed app version and `APP_BUILD` sets its build number. Defaults are `0.1.0` and `1`; increase them for each distributed update and match the release tag to the version. The overrides change the packaged app, not the checked-in bundle metadata.
+`APP_VERSION` sets the displayed app version and `APP_BUILD` sets its build number. Defaults come from `Resources/Info.plist` (currently `0.1.4` and `5`); increase them for each distributed update and match the release tag to the version. The overrides change the packaged app, not the checked-in bundle metadata.
 
 Test the resulting app using the [manual checklist](test-checklist.md), including replacement of an existing installation. Keep the reviewed commit SHA with your release notes. Upload **both** `dist/Air-Whisper.zip` and `dist/SHA256SUMS` to a private GitHub Release, or place both in an approved shared folder. Share the release or folder link with teammates, who follow the update steps above.
 
@@ -124,6 +128,8 @@ This creates a draft for review. Check its version, commit, notes, and attached 
 ```
 
 This diagnostic does not access the microphone. The [manual checklist](test-checklist.md) covers actual hardware, keyboard, clipboard, sleep, permission, and update behavior. Automated checks do not replace these tests.
+
+For support, the packaged executable also accepts `--version` and `--permission-status`. The latter reports version/build and the diagnostic process's Accessibility, Input Monitoring and Microphone grants without requesting permission, recording audio, or loading a model. Terminal-launched diagnostics can have a different macOS permission context; the running app's Setup status remains the user-facing check.
 
 See [validation results](docs/VALIDATION.md) for the tested build, real inference checks, and remaining hardware checks.
 

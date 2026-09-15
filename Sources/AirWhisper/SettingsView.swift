@@ -15,6 +15,7 @@ struct SettingsView: View {
                 Image(systemName: "waveform.circle.fill").font(.system(size: 40)).foregroundStyle(Color.accentColor)
                 VStack(alignment: .leading, spacing: 3) {
                     Text("Air Whisper").font(.title2.bold())
+                    Text(AppVersion.detail).font(.caption).foregroundStyle(.secondary)
                     Text(controller.statusText).font(.callout).foregroundStyle(.secondary).lineLimit(3)
                 }
                 Spacer()
@@ -50,11 +51,15 @@ struct SettingsView: View {
                         permissionRow("Microphone", detail: "Records only while you hold the push-to-talk key.",
                                       granted: controller.microphoneAuthorized, action: controller.requestMicrophoneAccess)
                         Divider()
-                        permissionRow("Accessibility", detail: "Detects the target field and inserts dictated text.",
+                        permissionRow("Accessibility", detail: "Enables the push-to-talk key, detects the target field and inserts dictated text.",
                                       granted: controller.accessibilityAuthorized, action: controller.requestAccessibilityAccess)
+                        if !controller.accessibilityAuthorized {
+                            Text("If macOS already shows Air Whisper as enabled after an update, quit Air Whisper, remove its Accessibility entry with −, then use + to add the installed app again. Enable access and reopen Air Whisper.")
+                                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                        }
                         if !controller.hotkeyActive {
                             Divider()
-                            permissionRow("Keyboard monitoring", detail: "If the hotkey is unavailable after granting Accessibility, allow Input Monitoring and reopen Air Whisper.",
+                            permissionRow("Input Monitoring", detail: "If the hotkey is unavailable after granting Accessibility, allow Input Monitoring, then quit and reopen Air Whisper.",
                                           granted: controller.monitoringAuthorized, action: controller.requestMonitoringAccess)
                         }
                     }.padding(8)

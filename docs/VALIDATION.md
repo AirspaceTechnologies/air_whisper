@@ -1,5 +1,13 @@
 # Swift build validation
 
+## Version visibility and permission recovery — 2026-09-15
+
+- `make all` passed using checked-in version 0.1.4 (build 5): 64 tests executed, 63 passed, one optional real-model test skipped; all seven bootstrap regression checks passed. Package self-check, signatures and portable dependencies verified successfully.
+- The menu title, Settings header and tooltip read version/build from bundle metadata. The packaged `--version` command returned `Air Whisper 0.1.4 (5)`; help lists the new read-only permission diagnostic.
+- The user reported an inactive Fn key after installing 0.1.3. Metadata confirmed Fn was still configured and the observed app event tap was disabled. Exact access for that older build was not available to the separate diagnostic runner.
+- Installed 0.1.4 in `/Applications` with a backup of 0.1.3. Launching the installed app through LaunchServices with `--permission-status` reported Accessibility and Input Monitoring **not authorized**, and Microphone **not determined**. These checks do not request permission, capture input or load models. Missing Accessibility directly stops the push-to-talk listener in the app.
+- Permission restoration requires user interaction in System Settings. Successful Fn detection and Chrome insertion after regrant remain pending; do not treat the build/test pass as a completed live hotkey check.
+
 ## Chrome accessibility update — 2026-09-15
 
 - `APP_VERSION=0.1.3 APP_BUILD=4 make all` passed on the development Mac: 64 tests executed, 63 passed and the optional real-model integration test skipped because its fixture environment variables were not configured. All seven bootstrap regression checks also passed.

@@ -12,6 +12,7 @@ Run `make all` for automated checks. Checked items record user-confirmed results
 - [ ] Verify legacy model reuse without redownloading.
 - [x] Replace installed 0.1.0 with 0.1.2 on the development Mac: Accessibility required reauthorization; dictation worked after recovery.
 - [ ] Repeat an app update and permission checks on a second company Mac.
+- [ ] Confirm the microphone menu and Settings show the same version/build as the installed bundle; missing permissions name the blocked access rather than showing Ready.
 - [ ] Toggle launch at login and verify after login from the installed app.
 
 ## Dictation and keyboard
