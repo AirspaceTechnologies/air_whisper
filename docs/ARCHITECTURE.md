@@ -31,7 +31,7 @@ Cancellation generations and per-operation deadlines feed native abort callbacks
 
 The app checks session identity again before insertion and compares the focused accessibility element with the original target. If automatic insertion is unavailable, it offers explicit copying of the result and expires the in-memory text after five minutes. Clipboard insertion snapshots all items/types and restores them only while it still owns the temporary clipboard generation. Newer clipboard content is preserved.
 
-On application activation and after Accessibility permission is available, Air Whisper requests `AXManualAccessibility` from apps that support it. This exposes Electron text fields without requiring VoiceOver. Preparation is remembered per process lifetime so repeated checks do not restart Electron's delayed accessibility activation. The original field must still be known when dictation begins: a later-discovered field is never substituted into a running session.
+On application activation and after Accessibility permission is available, Air Whisper requests `AXManualAccessibility` from apps that support it. This exposes Electron text fields without requiring VoiceOver. When that attribute is unsupported, Google Chrome (stable, beta, dev and canary) and Chromium receive an `AXEnhancedUserInterface` request to expose web fields. Other apps do not receive this fallback. Preparation is remembered per process lifetime so repeated checks do not restart delayed accessibility activation. Transient failures remain retryable. The original field must still be known when dictation begins: a later-discovered field is never substituted into a running session.
 
 ## Distribution and updates
 

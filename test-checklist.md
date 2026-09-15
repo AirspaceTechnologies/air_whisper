@@ -22,6 +22,9 @@ Run `make all` for automated checks. Checked items record user-confirmed results
 - [ ] Start Slack before and after Air Whisper, focus its message editor, wait a couple of seconds, and verify dictation inserts there without sending the message.
 - [ ] Start dictation immediately after first activating Slack; if the field is unavailable, confirm the transcript can still be copied and a later dictation inserts normally.
 - [ ] While transcribing in Slack, move from the message editor to search or a different composer; confirm automatic insertion is refused.
+- [ ] Start Chrome before and after Air Whisper; focus a normal input, textarea and contenteditable field, wait a couple of seconds, and verify insertion without submitting the form.
+- [ ] Dictate immediately after first activating Chrome; if accessibility is still loading, confirm menu recovery works and a later attempt inserts normally.
+- [ ] While transcribing in Chrome, change fields, tabs or windows; confirm text never reaches the new destination. Repeat in the web editor that originally failed.
 - [ ] Starting changes to Listening only after audio arrives.
 - [ ] Release/cancel during startup leaves no open mic.
 - [ ] Short taps insert nothing, a 60-second take works, and the 120-second cap releases the microphone.

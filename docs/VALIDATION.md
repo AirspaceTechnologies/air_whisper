@@ -1,5 +1,14 @@
 # Swift build validation
 
+## Chrome accessibility update — 2026-09-15
+
+- `APP_VERSION=0.1.3 APP_BUILD=4 make all` passed on the development Mac: 64 tests executed, 63 passed and the optional real-model integration test skipped because its fixture environment variables were not configured. All seven bootstrap regression checks also passed.
+- The 21 accessibility preparation/focus tests cover Chrome/Chromium fallback, Electron precedence, exact browser bundle matching, inherited AppKit state, retry behavior, one successful request per launch, and rejection of a destination first discovered after dictation started. Tests inject AX responses and do not inspect browser page content.
+- Release packaging, bundle self-check, ad hoc signatures and portable dependency verification passed for 0.1.3 (build 4). Independent code review found no additional issues.
+- Live Chrome insertion and first-activation timing still require user validation. The read-only diagnostic runner lacks Accessibility permission, so it could not inspect Chrome's focused field. See the Chrome cases in `test-checklist.md`.
+
+## Previous release validation — 2026-09-09
+
 Verified on 2026-09-09 using an Apple Silicon Mac, macOS 26.5.1, Xcode's Swift 6.3.3 toolchain. The app's deployment target is macOS 13.3; older supported OS versions and other machines still need manual validation.
 
 ## Completed
