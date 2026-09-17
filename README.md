@@ -1,12 +1,14 @@
 # Air Whisper
 
-Private push-to-talk dictation for macOS. Hold **Fn / Globe**, speak, release, and your words appear in the focused app. The native Swift menu app records audio in memory and transcribes with a bundled, Metal-accelerated whisper.cpp library. No dictation-service account, telemetry, cloud transcription, or paid developer membership.
+Local push-to-talk dictation for macOS. Hold **Fn / Globe**, speak, release, and your words appear in the focused app. The native Swift menu app records audio in memory and transcribes with a bundled, Metal-accelerated whisper.cpp library. No dictation-service account, telemetry, cloud transcription, or paid developer membership.
 
-Requires **macOS 13.3 or later**. The initial release targets Apple Silicon. Teammates do not need Swift, Xcode, Homebrew, ffmpeg, or Hammerspoon.
+Requires **macOS 13.3 or later** and **Apple Silicon** for the supported app distribution. Users do not need Swift, Xcode, Homebrew, ffmpeg, or Hammerspoon.
 
-## Install for teammates
+**Public release preparation:** company approval is pending. This branch proposes the MIT license and copyright attribution for review; it does not authorize publication. The repository is still private, and the latest published app is **0.1.2**. This branch contains **0.1.4 (5)** changes that have not been released. See the [approval and release checklist](docs/PUBLIC_RELEASE.md).
 
-1. Open this private repository's [Releases](https://github.com/AirspaceTechnologies/air_whisper/releases) and download **Air-Whisper.zip** from the release's **Assets** section. Choose the app ZIP, not GitHub's source-code archive. Repository access is required; a maintainer can also provide the same ZIP through an approved company shared folder. Maintainers publish reviewed builds after merge; until the first release is available, use the maintainer-provided ZIP.
+## Install
+
+1. Open [Releases](https://github.com/AirspaceTechnologies/air_whisper/releases) and download **Air-Whisper.zip** from the desired release's **Assets** section. Choose the app ZIP, not GitHub's source-code archive, and read that release's installation notes. While the repository is private, repository access is required; a maintainer can provide the same ZIP through an approved shared folder. Features on an unmerged branch are available only by building that branch or obtaining a maintainer's review build.
 2. Double-click the ZIP to extract it. Move **Air Whisper.app** to **Applications** (or `~/Applications`) and open that copy.
 3. If macOS blocks it, use **System Settings → Privacy & Security → Open Anyway**, then confirm Open. Builds use local ad hoc signing, without Apple Developer ID or notarization. Company-managed Macs may require IT to allow the app. Do not disable Gatekeeper globally. [Apple's instructions](https://support.apple.com/en-us/102445).
 4. Open **Settings…** from the microphone icon in the menu bar. Grant **Microphone**, **Accessibility**, and **Input Monitoring** if requested for the global keyboard listener. Quit and reopen the app if a permission change requires it.
@@ -19,9 +21,9 @@ No terminal commands or developer tools are needed for installation. To check a 
 
 Updates are installed manually; the app has no automatic updater.
 
-The microphone menu and Settings header show the running app's version and build, for example **Air Whisper 0.1.4 (5)**. Use these to confirm which copy you opened after an update.
+Starting with 0.1.4, the microphone menu and Settings header show the running app's version and build, for example **Air Whisper 0.1.4 (5)**. Use these to confirm which copy you opened after an update. For the older 0.1.2 release, select the installed app in Finder and use **Get Info** to check its version.
 
-1. Download the newer **Air-Whisper.zip** from Releases or your team's approved shared folder. Keep the previous ZIP if you want an easy rollback.
+1. Download the newer **Air-Whisper.zip** from Releases or a maintainer's approved shared folder. Keep the previous ZIP if you want an easy rollback.
 2. Choose **microphone menu → Quit Air Whisper**. Closing the Settings window leaves dictation running.
 3. Extract the new ZIP and replace the existing **Air Whisper.app** in the same Applications folder. Keep one installed copy and reopen it from there.
 4. Approve **Open Anyway** or permissions again if macOS requests them. Confirm a short dictation works in a text field and that your chosen microphone is still selected.
@@ -58,10 +60,14 @@ If Fn does nothing after an update, check Air Whisper's own Settings status. Mis
 The build machine needs a current Xcode installation and its selected command-line tools. No signing team or developer account is configured.
 
 ```sh
+git clone https://github.com/AirspaceTechnologies/air_whisper.git
+cd air_whisper
 ./setup.sh
 # Equivalent:
 make app
 ```
+
+Cloning requires GitHub authentication and repository access while the repository is private. For an unmerged review build, check out the intended PR branch before running the build.
 
 This downloads a pinned, SHA-256-verified official whisper.cpp XCFramework, builds the executable, embeds its framework and licenses, ad hoc signs and verifies the bundle, runs a noninteractive self-check, and produces:
 
@@ -86,30 +92,30 @@ After bootstrapping, open `Package.swift` in Xcode if desired. Use the packaged 
 
 ## Build and share an update
 
-A maintainer builds once on Apple Silicon and shares the same ZIP with teammates; recipients do not build from source. Start from a clean checkout after the change has been reviewed and merged:
+A maintainer builds once on Apple Silicon and distributes the same ZIP to users. Complete the [release checklist](docs/PUBLIC_RELEASE.md) before publication. Start from a clean checkout after the change has been reviewed and merged:
 
 ```sh
 git switch main
 git pull --ff-only
-APP_VERSION=0.1.1 APP_BUILD=2 make all
+make all
 ```
 
 `APP_VERSION` sets the displayed app version and `APP_BUILD` sets its build number. Defaults come from `Resources/Info.plist` (currently `0.1.4` and `5`); increase them for each distributed update and match the release tag to the version. The overrides change the packaged app, not the checked-in bundle metadata.
 
-Test the resulting app using the [manual checklist](test-checklist.md), including replacement of an existing installation. Keep the reviewed commit SHA with your release notes. Upload **both** `dist/Air-Whisper.zip` and `dist/SHA256SUMS` to a private GitHub Release, or place both in an approved shared folder. Share the release or folder link with teammates, who follow the update steps above.
+Test the resulting app using the [manual checklist](test-checklist.md), including replacement of an existing installation. Keep the reviewed commit SHA with your release notes. Attach **both** `dist/Air-Whisper.zip` and `dist/SHA256SUMS` to a draft GitHub Release for review. An approved shared folder is also suitable for internal review builds.
 
 The following is an example for a maintainer with the GitHub CLI installed and authenticated. Run it only after review and merge, from the checkout used for the build. Write release notes first, including changes, required macOS/architecture, and any update caveats:
 
 ```sh
-# Replace the placeholder with the full reviewed commit SHA used for the build.
-gh release create v0.1.1 dist/Air-Whisper.zip dist/SHA256SUMS \
+# Example only: match version/build to the tested app and use its full commit SHA.
+gh release create v0.1.4 dist/Air-Whisper.zip dist/SHA256SUMS \
   --draft \
   --target "<reviewed-commit-SHA>" \
-  --title "Air Whisper 0.1.1" \
+  --title "Air Whisper 0.1.4" \
   --notes-file /path/to/release-notes.md
 ```
 
-This creates a draft for review. Check its version, commit, notes, and attached files, then publish it in GitHub's Releases page when approved. The build scripts do not publish releases, and builds/releases are not currently automated by CI.
+This creates a draft for review. Check its version, commit, notes, and attached files, then publish it in GitHub's Releases page when approved. The build scripts do not install the app or publish releases. CI runs automated build and test checks; a passing check does not publish a release or complete the manual hardware checks.
 
 ## Privacy and storage
 
@@ -117,6 +123,8 @@ This creates a draft for review. Check its version, commit, notes, and attached 
 - Audio stays in process memory. The app does not create recording files or upload audio. This does not prevent operating-system swap or diagnostic dumps.
 - Embedded inference requires no HTTP server, listening port, or network connection.
 - Explicit model downloads contact Hugging Face and its download hosting. Exact file size and SHA-256 are verified before atomic installation; dictation then works offline.
+- Clipboard insertion temporarily places the transcript on the system clipboard. Clipboard managers, Universal Clipboard, and destination apps may retain or sync it; restoring the previous clipboard cannot recall copies they have taken. **Preferences → Insert using → Simulated typing** avoids the clipboard for automatic insertion. Explicit **Copy Dictation** writes the transcript to the clipboard and leaves it there for you to paste.
+- When automatic insertion fails, **Copy Dictation** holds the result in memory for up to five minutes. Starting a new recording, resetting dictation, sleeping/locking, or quitting clears it. The app does not maintain a transcript history.
 - New models live in `~/Library/Application Support/Air Whisper/models` in private app directories. Legacy models are read without being moved or deleted.
 - Settings use the app's macOS preferences. Diagnostics omit audio and transcript content. The explicit `--transcribe-file` diagnostic reports the supplied file's duration and recognized character count.
 - The model stays loaded for responsive dictation. Medium English needs more RAM and processing time than Small English.
@@ -161,3 +169,9 @@ Turn off **Launch Air Whisper at login** in Preferences, choose **microphone men
 | `Tests` | Automated regression coverage |
 | `ThirdParty` | Pinned dependency details and licenses |
 | `legacy` | Original Hammerspoon implementation |
+
+## Contributing, security, and licensing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development and testing, and [SECURITY.md](SECURITY.md) for reporting a vulnerability. Please keep recordings, transcripts, credentials, and private workspace data out of issues and pull requests.
+
+The proposed license for Air Whisper's original code and documentation is [MIT](LICENSE), with copyright attributed to Airspace Technologies pending company confirmation. The project license is included in packaged apps at `Contents/Resources/LICENSE`. Dependencies and downloaded model weights retain their own licenses and copyright notices; see [ThirdParty/NOTICES.md](ThirdParty/NOTICES.md). MIT licensing of the application does not change those upstream terms.

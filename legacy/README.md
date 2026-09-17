@@ -1,16 +1,16 @@
-# air_whisper — local push-to-talk dictation for macOS
+# Air Whisper legacy Hammerspoon prototype
 
-**Totally private, totally local, and totally free!**
+This directory preserves the original Lua implementation. For new installations, use the [native Swift app](../README.md). These instructions apply only to the legacy prototype, which uses Hammerspoon, FFmpeg, and a local Whisper HTTP server and writes temporary audio files. Do not enable both implementations with the same hotkey.
 
-Hold **fn**, talk, release — your words land at the cursor in whatever app is frontmost. Whisper runs entirely on your Mac (small.en by default): audio never touches the network, there are no accounts, and nothing to pay for. What Wispr Flow charges $144/year for, auditable in one Lua file.
+Hold **fn**, talk, release: the prototype transcribes locally with Whisper (small.en by default) and inserts text into the focused app. It uses no cloud transcription service or dictation account. See the privacy details below for temporary files and clipboard behavior.
 
-## Install (60 seconds + two clicks)
+## Legacy installation
 
 ```
 git clone git@github.com:AirspaceTechnologies/air_whisper.git && cd air_whisper/legacy && ./setup.sh
 ```
 
-Setup asks **nothing**. When Hammerspoon launches, it walks you through the only two things Apple requires a human to click — the Accessibility and Microphone permissions — then configures everything else itself: Globe-key behavior, launch-at-login, mic selection, status readout in the 🎤 menu. Dictate once and it congratulates you; you're done.
+The repository currently requires access. The installer downloads dependencies and models, writes the legacy configuration, and updates Hammerspoon's setup. When Hammerspoon launches, its setup wizard requests Accessibility and Microphone permissions and configures Globe-key behavior, launch-at-login, mic selection, and the 🎤 menu. macOS may also require Input Monitoring permission. Read `setup.sh` before running it on an existing Hammerspoon installation.
 
 Add `--with-medium` to also download the larger `medium.en` model (~1.5 GB). Requires **whisper-cpp ≥ 1.8.5** — setup.sh checks Homebrew's installed version and tells you to `brew upgrade whisper-cpp` if it's older. Self-built (non-Homebrew) binaries can't be version-verified; if you've verified yours, run `DICTATE_SKIP_VERSION_CHECK=1 ./setup.sh`.
 
@@ -63,7 +63,7 @@ The tool self-heals in layers: a watchdog stops the recording within ~¼ s if ma
 - **First, run `./diagnose.sh`** (before killing anything). It saves a thread sample of the frozen process, Hammerspoon's system log, and the dictation log to a folder on your Desktop — the Console window's scrollback dies with the process, but these survive. Then:
 
 - **🎤 menu → Restart dictation** (reloads the Hammerspoon config), or
-- quit/kill Hammerspoon and relaunch it: **`open -a Hammerspoon`** (or Spotlight → "Hammerspoon"). On load the module kills any stray recorder process and deletes leftover audio, so a hard kill never leaves the mic open past the 120 s cap or audio on disk.
+- quit Hammerspoon and relaunch it: **`open -a Hammerspoon`** (or Spotlight → "Hammerspoon"). On load the module attempts to stop a stray recorder process and delete leftover audio. A forced termination can interrupt cleanup; check the microphone indicator and `~/.dictate/tmp/` if shutdown did not complete normally.
 
 Tip: enable **"Launch Hammerspoon at login"** in Hammerspoon's preferences so the tool is always resident.
 
@@ -83,11 +83,16 @@ Tip: enable **"Launch Hammerspoon at login"** in Hammerspoon's preferences so th
 
 ## Privacy
 
+- Default insertion uses the system clipboard. Clipboard managers, Universal Clipboard, and destination applications may retain or sync text even after the prototype restores the previous clipboard contents.
 - Audio is written to `~/.dictate/tmp/rec.wav` and **deleted after every dictation**, success or failure; leftovers are cleared on load. The whole `~/.dictate` tree is kept at **0700** (repaired on every module load) — macOS home directories are staff-group-traversable by default, and live audio must not be readable by other local users even briefly.
 - The log (`~/.dictate/log.txt`) records device names and errors — **never transcripts, never audio**.
-- Transcription happens in a local `whisper-server` bound to `127.0.0.1` (loopback never leaves the machine). The upload is invoked proxy-immune (`curl -q --noproxy "*"`), so proxy environment variables or a `~/.curlrc` cannot reroute audio through a proxy. The only true network access is `setup.sh` downloading models from Hugging Face, once (that download *does* honor your proxy, deliberately — it's public content you may need a proxy to reach).
+- Transcription happens in a local `whisper-server` bound to `127.0.0.1` (loopback never leaves the machine). The upload is invoked proxy-immune (`curl -q --noproxy "*"`), so proxy environment variables or a `~/.curlrc` cannot reroute audio through a proxy. Installation downloads dependencies and models; model downloads from Hugging Face honor proxy settings.
 - The model stays resident in RAM (~600 MB for small.en) while Hammerspoon runs — that's the price of ~0.5 s transcriptions.
 - No accounts, no telemetry, no cloud.
+
+## Licensing
+
+The prototype's original code uses the project [MIT license](../LICENSE). Its installer obtains Hammerspoon, FFmpeg, whisper.cpp, and model weights separately; they retain their upstream licenses. FFmpeg's obligations depend on the build being distributed. Review the [upstream FFmpeg licensing information](https://ffmpeg.org/legal.html) before redistributing it. For the separate native app's bundled components, see [ThirdParty/NOTICES.md](../ThirdParty/NOTICES.md).
 
 ## Files
 

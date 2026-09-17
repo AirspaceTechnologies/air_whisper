@@ -2,6 +2,8 @@
 
 Air Whisper embeds the official whisper.cpp XCFramework, including ggml, and optionally downloads converted OpenAI Whisper model weights. Include this directory in distributed app bundles.
 
+These notices cover third-party components. Air Whisper's original source and documentation are covered by the separate project [LICENSE](../LICENSE), which is packaged at `Contents/Resources/LICENSE`; this directory is packaged at `Contents/Resources/ThirdParty`. Preserve the upstream copyright and license texts when redistributing the app. Model files are downloaded separately, and their licenses still apply when they are redistributed independently.
+
 ## whisper.cpp and ggml
 
 - Upstream: https://github.com/ggml-org/whisper.cpp
