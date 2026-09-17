@@ -6,16 +6,30 @@ Requires **macOS 13.3 or later** and **Apple Silicon** for the supported app dis
 
 Download **[Air Whisper 0.1.4 (build 5)](https://github.com/AirspaceTechnologies/air_whisper/releases/tag/v0.1.4)** and follow the installation steps below. Air Whisper is open source under the [MIT license](LICENSE).
 
+**First launch:** if macOS says it cannot verify Air Whisper and offers **Move to Trash** or **Done**, choose **Done** and follow [these opening instructions](#macos-blocked-the-app-on-first-open).
+
 ## Install
 
 1. Open the [0.1.4 release](https://github.com/AirspaceTechnologies/air_whisper/releases/tag/v0.1.4) and download **Air-Whisper.zip** from its **Assets** section. Choose the app ZIP, not GitHub's source-code archive, and read the release's installation notes.
 2. Double-click the ZIP to extract it. Move **Air Whisper.app** to **Applications** (or `~/Applications`) and open that copy.
-3. If macOS blocks it, use **System Settings → Privacy & Security → Open Anyway**, then confirm Open. Builds use local ad hoc signing, without Apple Developer ID or notarization. Company-managed Macs may require IT to allow the app. Do not disable Gatekeeper globally. [Apple's instructions](https://support.apple.com/en-us/102445).
+3. If macOS says it cannot verify the app is free of malware, follow [macOS blocked the app on first open](#macos-blocked-the-app-on-first-open) below, then continue with step 4.
 4. Open **Settings…** from the microphone icon in the menu bar. Grant **Microphone**, **Accessibility**, and **Input Monitoring** if requested for the global keyboard listener. Quit and reopen the app if a permission change requires it.
 5. Download **Small English**, or choose an existing official `ggml-small.en.bin`. Models already in `~/.dictate/models/` are also recognized. Small English is approximately 488 MB; Medium English is approximately 1.53 GB.
 6. Set **System Settings → Keyboard → Press 🌐 key to → Do Nothing**. Select Right Option, Right Command, or Right Control if your keyboard does not send Fn to macOS.
 
 No terminal commands or developer tools are needed for installation. To check a download optionally, save the release's `SHA256SUMS` beside the ZIP and run `shasum -a 256 -c SHA256SUMS` from that folder.
+
+### macOS blocked the app on first open
+
+Air Whisper is signed locally (ad hoc), without an Apple Developer ID or Apple's notarization check. Follow these steps only for an app you trust from the [official release](https://github.com/AirspaceTechnologies/air_whisper/releases/tag/v0.1.4).
+
+1. In the warning, choose **Done** to keep the app.
+2. In Finder, move **Air Whisper.app** to **Applications** if needed, then try opening that installed copy. Choose **Done** again if the warning returns.
+3. Open **System Settings → Privacy & Security** and scroll down to the **Security** section.
+4. Click **Open Anyway** beside the message that Air Whisper was blocked. **This button is in System Settings**; the original warning only offers **Move to Trash** and **Done**.
+5. Confirm **Open** and authenticate if prompted. Once Air Whisper opens, continue with **step 4 under [Install](#install)** to grant its permissions and finish setup.
+
+If **Open Anyway** is missing, try opening the installed app again, then return to **Privacy & Security**. A company-managed Mac may require IT to allow the app. See [Apple's instructions](https://support.apple.com/en-us/102445).
 
 ## Update an installed app
 
