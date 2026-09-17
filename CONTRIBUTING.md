@@ -1,10 +1,10 @@
 # Contributing to Air Whisper
 
-Public release approval is pending. Contributions and review builds remain within the private repository until publication is approved; see [the release checklist](docs/PUBLIC_RELEASE.md).
+Bug reports and focused pull requests are welcome. Include the app version/build and steps to reproduce a problem using non-sensitive examples. For release maintenance, see [the release checklist](docs/PUBLIC_RELEASE.md).
 
 ## Develop and validate
 
-Use an Apple Silicon Mac with Xcode and its selected command-line tools. No paid developer account or signing team is needed. Clone the repository, create a branch, and run:
+Use an Apple Silicon Mac with Xcode and its selected command-line tools. No paid developer account or signing team is needed. Fork and clone the repository, create a branch, and run:
 
 ```sh
 make all

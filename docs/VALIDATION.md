@@ -1,5 +1,16 @@
 # Swift build validation
 
+## Public release 0.1.4 (build 5) — 2026-09-17
+
+Validated on an Apple Silicon Mac running macOS 26.5.1 with Swift 6.3.3. This release uses the merged native app and public-release preparation changes; the open custom-vocabulary and cleanup features are not included.
+
+- `make all` passed from a fresh worktree: 64 Swift tests, 63 passed and one optional model test skipped; all seven dependency-cache regression checks passed. The optional verified Small English/public JFK integration test then passed separately, including expected speech, silence suppression, cancellation and model reuse.
+- Extracted the generated ZIP and verified its SHA-256, arm64 executable, version/build, app/framework signatures, portable dependencies, exact project and third-party licenses, and noninteractive self-check. The extracted executable also transcribed the public JFK fixture with an expected-phrase assertion. No live microphone, installed app, or normal clipboard was accessed.
+- The ZIP contains no model/audio files, AppleDouble entries or archived extended attributes. The packaged app executable contains no developer home path. Upstream frameworks may retain public upstream build metadata.
+- Publication artifact SHA-256: `882e846f2a86e6236be3817f53913dbac714b0660ed9ac425e62a2c9481328c8`. Both the app ZIP and `SHA256SUMS` are release assets; a subsequent rebuild can have a different ZIP hash.
+
+Installation on a second physical Mac, a fresh permission/hotkey/Chrome/Slack session, and the full manual hardware matrix were not repeated for this publication. Prior user feedback indicates the native app works well, but does not establish that every manual case or supported macOS version passed. These remain explicit limits of this release's validation.
+
 ## Version visibility and permission recovery — 2026-09-15
 
 - `make all` passed using checked-in version 0.1.4 (build 5): 64 tests executed, 63 passed, one optional real-model test skipped; all seven bootstrap regression checks passed. Package self-check, signatures and portable dependencies verified successfully.

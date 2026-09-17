@@ -7,10 +7,10 @@ Hold **fn**, talk, release: the prototype transcribes locally with Whisper (smal
 ## Legacy installation
 
 ```
-git clone git@github.com:AirspaceTechnologies/air_whisper.git && cd air_whisper/legacy && ./setup.sh
+git clone https://github.com/AirspaceTechnologies/air_whisper.git && cd air_whisper/legacy && ./setup.sh
 ```
 
-The repository currently requires access. The installer downloads dependencies and models, writes the legacy configuration, and updates Hammerspoon's setup. When Hammerspoon launches, its setup wizard requests Accessibility and Microphone permissions and configures Globe-key behavior, launch-at-login, mic selection, and the 🎤 menu. macOS may also require Input Monitoring permission. Read `setup.sh` before running it on an existing Hammerspoon installation.
+The installer downloads dependencies and models, writes the legacy configuration, and updates Hammerspoon's setup. When Hammerspoon launches, its setup wizard requests Accessibility and Microphone permissions and configures Globe-key behavior, launch-at-login, mic selection, and the 🎤 menu. macOS may also require Input Monitoring permission. Read `setup.sh` before running it on an existing Hammerspoon installation.
 
 Add `--with-medium` to also download the larger `medium.en` model (~1.5 GB). Requires **whisper-cpp ≥ 1.8.5** — setup.sh checks Homebrew's installed version and tells you to `brew upgrade whisper-cpp` if it's older. Self-built (non-Homebrew) binaries can't be version-verified; if you've verified yours, run `DICTATE_SKIP_VERSION_CHECK=1 ./setup.sh`.
 

@@ -4,11 +4,11 @@ Local push-to-talk dictation for macOS. Hold **Fn / Globe**, speak, release, and
 
 Requires **macOS 13.3 or later** and **Apple Silicon** for the supported app distribution. Users do not need Swift, Xcode, Homebrew, ffmpeg, or Hammerspoon.
 
-**Public release preparation:** company approval is pending. This branch proposes the MIT license and copyright attribution for review; it does not authorize publication. The repository is still private, and the latest published app is **0.1.2**. This branch contains **0.1.4 (5)** changes that have not been released. See the [approval and release checklist](docs/PUBLIC_RELEASE.md).
+Download **[Air Whisper 0.1.4 (build 5)](https://github.com/AirspaceTechnologies/air_whisper/releases/tag/v0.1.4)** and follow the installation steps below. Air Whisper is open source under the [MIT license](LICENSE).
 
 ## Install
 
-1. Open [Releases](https://github.com/AirspaceTechnologies/air_whisper/releases) and download **Air-Whisper.zip** from the desired release's **Assets** section. Choose the app ZIP, not GitHub's source-code archive, and read that release's installation notes. While the repository is private, repository access is required; a maintainer can provide the same ZIP through an approved shared folder. Features on an unmerged branch are available only by building that branch or obtaining a maintainer's review build.
+1. Open the [0.1.4 release](https://github.com/AirspaceTechnologies/air_whisper/releases/tag/v0.1.4) and download **Air-Whisper.zip** from its **Assets** section. Choose the app ZIP, not GitHub's source-code archive, and read the release's installation notes.
 2. Double-click the ZIP to extract it. Move **Air Whisper.app** to **Applications** (or `~/Applications`) and open that copy.
 3. If macOS blocks it, use **System Settings → Privacy & Security → Open Anyway**, then confirm Open. Builds use local ad hoc signing, without Apple Developer ID or notarization. Company-managed Macs may require IT to allow the app. Do not disable Gatekeeper globally. [Apple's instructions](https://support.apple.com/en-us/102445).
 4. Open **Settings…** from the microphone icon in the menu bar. Grant **Microphone**, **Accessibility**, and **Input Monitoring** if requested for the global keyboard listener. Quit and reopen the app if a permission change requires it.
@@ -23,7 +23,7 @@ Updates are installed manually; the app has no automatic updater.
 
 Starting with 0.1.4, the microphone menu and Settings header show the running app's version and build, for example **Air Whisper 0.1.4 (5)**. Use these to confirm which copy you opened after an update. For the older 0.1.2 release, select the installed app in Finder and use **Get Info** to check its version.
 
-1. Download the newer **Air-Whisper.zip** from Releases or a maintainer's approved shared folder. Keep the previous ZIP if you want an easy rollback.
+1. Download the newer **Air-Whisper.zip** from [Releases](https://github.com/AirspaceTechnologies/air_whisper/releases). Keep the previous ZIP if you want an easy rollback.
 2. Choose **microphone menu → Quit Air Whisper**. Closing the Settings window leaves dictation running.
 3. Extract the new ZIP and replace the existing **Air Whisper.app** in the same Applications folder. Keep one installed copy and reopen it from there.
 4. Approve **Open Anyway** or permissions again if macOS requests them. Confirm a short dictation works in a text field and that your chosen microphone is still selected.
@@ -67,7 +67,7 @@ cd air_whisper
 make app
 ```
 
-Cloning requires GitHub authentication and repository access while the repository is private. For an unmerged review build, check out the intended PR branch before running the build.
+To reproduce a published version, check out its release tag before building. Features in an unmerged PR require checking out that PR's branch; they are not included in a release until explicitly merged and released.
 
 This downloads a pinned, SHA-256-verified official whisper.cpp XCFramework, builds the executable, embeds its framework and licenses, ad hoc signs and verifies the bundle, runs a noninteractive self-check, and produces:
 
@@ -174,4 +174,4 @@ Turn off **Launch Air Whisper at login** in Preferences, choose **microphone men
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for development and testing, and [SECURITY.md](SECURITY.md) for reporting a vulnerability. Please keep recordings, transcripts, credentials, and private workspace data out of issues and pull requests.
 
-The proposed license for Air Whisper's original code and documentation is [MIT](LICENSE), with copyright attributed to Airspace Technologies pending company confirmation. The project license is included in packaged apps at `Contents/Resources/LICENSE`. Dependencies and downloaded model weights retain their own licenses and copyright notices; see [ThirdParty/NOTICES.md](ThirdParty/NOTICES.md). MIT licensing of the application does not change those upstream terms.
+Air Whisper's original code and documentation use the [MIT license](LICENSE), with copyright attributed to Airspace Technologies. The project license is included in packaged apps at `Contents/Resources/LICENSE`. Dependencies and downloaded model weights retain their own licenses and copyright notices; see [ThirdParty/NOTICES.md](ThirdParty/NOTICES.md). MIT licensing of the application does not change those upstream terms.
