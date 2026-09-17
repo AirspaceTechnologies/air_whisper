@@ -6,6 +6,7 @@ import SwiftUI
 import AirWhisperCore
 import AirWhisperAudio
 import AirWhisperSpeech
+import AirWhisperLLM
 
 @MainActor
 final class AppController: ObservableObject {
@@ -26,6 +27,7 @@ final class AppController: ObservableObject {
     let settings = SettingsStore()
     let devices = AudioDeviceManager()
     let models = ModelManager()
+    let cleanupModels = LLMModelManager()
     @Published private(set) var phase: Phase = .idle
     @Published private(set) var microphoneAuthorized = false
     @Published private(set) var accessibilityAuthorized = false
@@ -34,6 +36,9 @@ final class AppController: ObservableObject {
     @Published private(set) var modelReady = false
     @Published private(set) var preparingModel = false
     @Published private(set) var downloadingModel = false
+    @Published private(set) var cleanupModelReady = false
+    @Published private(set) var preparingCleanupModel = false
+    @Published private(set) var downloadingCleanupModel = false
     @Published private(set) var message: String?
     @Published private(set) var activeMicrophone = ""
     @Published private(set) var pendingTranscript: String?
@@ -45,6 +50,7 @@ final class AppController: ObservableObject {
 
     private let recorder = AudioRecorder()
     private let transcriber = WhisperTranscriber()
+    private let cleaner = TranscriptCleaner()
     private let keyboard = KeyboardMonitor()
     private let insertion = TextInsertion()
     private let accessibilityPreparation = AccessibilityPreparation()
@@ -54,6 +60,8 @@ final class AppController: ObservableObject {
     private var sessionID: UUID?
     private var cancellationID: UUID?
     private var modelOperationID: UUID?
+    private var cleanupModelOperationID: UUID?
+    private var cleanupSyncPending = false
     private var startedAt: Date?
     private var activeScreen: NSScreen?
     private var insertionTarget: InsertionTarget?
@@ -62,6 +70,7 @@ final class AppController: ObservableObject {
     private var processingTask: Task<Void, Never>?
     private var cancellationTask: Task<Void, Never>?
     private var modelTask: Task<Void, Never>?
+    private var cleanupModelTask: Task<Void, Never>?
     private var overlayTask: Task<Void, Never>?
     private var pendingExpiryTask: Task<Void, Never>?
     private var permissionTimer: Timer?
@@ -100,6 +109,11 @@ final class AppController: ObservableObject {
             }
             self.onStatusChange?()
         }.store(in: &observation)
+        // @Published emits before storage changes; pass the next selection explicitly.
+        // Unrelated settings must not interrupt a cleanup model download or inference.
+        settings.$value.map(CleanupConfiguration.init).removeDuplicates().dropFirst().sink { [weak self] next in
+            self?.syncCleanupModel(configuration: next)
+        }.store(in: &observation)
         objectWillChange.sink { [weak self] in
             DispatchQueue.main.async { self?.onStatusChange?() }
         }.store(in: &observation)
@@ -116,6 +130,7 @@ final class AppController: ObservableObject {
         }
         installLifecycleObservers()
         if currentModelURL != nil { prepareModel() }
+        syncCleanupModel()
         if !microphoneAuthorized || !accessibilityAuthorized || !hotkeyActive || currentModelURL == nil {
             onShowSettings?()
         }
@@ -124,6 +139,8 @@ final class AppController: ObservableObject {
     var currentModelURL: URL? {
         settings.modelURL(for: settings.value.model) ?? models.installedURL(for: settings.value.model)
     }
+
+    var currentCleanupModelURL: URL? { cleanupModels.installedURL(for: settings.value.cleanupModel) }
 
     func refreshPermissions() {
         microphoneAuthorized = AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
@@ -275,6 +292,76 @@ final class AppController: ObservableObject {
         message = "Model download cancelled."
     }
 
+    func syncCleanupModel(configuration: CleanupConfiguration? = nil) {
+        guard !quitting else { return }
+        guard !isBusy else { cleanupSyncPending = true; return }
+        cleanupSyncPending = false
+        let selection = configuration ?? CleanupConfiguration(settings.value)
+        cleanupModelTask?.cancel()
+        cleanupModels.cancelDownload()
+        downloadingCleanupModel = false
+        cleaner.cancel()
+        cleanupModelReady = false
+        let operation = UUID()
+        cleanupModelOperationID = operation
+        guard selection.enabled, let url = cleanupModels.installedURL(for: selection.model) else {
+            preparingCleanupModel = false
+            cleanupModelTask = Task { await cleaner.unload() }
+            return
+        }
+        preparingCleanupModel = true
+        cleanupModelTask = Task { [weak self] in
+            guard let self else { return }
+            do {
+                try await self.cleaner.prepare(modelURL: url)
+                guard self.cleanupModelOperationID == operation, !Task.isCancelled else { return }
+                self.cleanupModelReady = true
+                self.preparingCleanupModel = false
+            } catch {
+                guard self.cleanupModelOperationID == operation, !Task.isCancelled else { return }
+                self.preparingCleanupModel = false
+                self.message = "Cleanup model could not be loaded: \(error.localizedDescription)"
+            }
+        }
+    }
+
+    func downloadCleanupModel() {
+        guard !isBusy, !quitting, settings.value.cleanupEnabled, !downloadingCleanupModel else { return }
+        cleanupModelTask?.cancel()
+        cleaner.cancel()
+        preparingCleanupModel = false
+        cleanupModelReady = false
+        message = nil
+        downloadingCleanupModel = true
+        let chosen = settings.value.cleanupModel
+        let operation = UUID()
+        cleanupModelOperationID = operation
+        cleanupModelTask = Task { [weak self] in
+            guard let self else { return }
+            do {
+                _ = try await self.cleanupModels.download(chosen)
+                guard self.cleanupModelOperationID == operation, !Task.isCancelled else { return }
+                self.downloadingCleanupModel = false
+                self.syncCleanupModel()
+            } catch {
+                guard self.cleanupModelOperationID == operation, !Task.isCancelled else { return }
+                self.downloadingCleanupModel = false
+                if !(error is CancellationError) {
+                    self.message = "Cleanup model download failed: \(error.localizedDescription)"
+                }
+            }
+        }
+    }
+
+    func cancelCleanupModelDownload() {
+        cleanupModels.cancelDownload()
+        cleanupModelTask?.cancel()
+        cleanupModelOperationID = nil
+        downloadingCleanupModel = false
+        message = "Cleanup model download cancelled."
+        syncCleanupModel()
+    }
+
     func chooseExistingModel() {
         guard !isBusy, !downloadingModel else { return }
         let panel = NSOpenPanel()
@@ -387,10 +474,16 @@ final class AppController: ObservableObject {
                 self.overlay.show("Transcribing…", symbol: "ellipsis.bubble", screen: self.activeScreen)
                 let raw = try await self.transcriber.transcribe(audio, language: "en")
                 guard self.sessionID == id, !Task.isCancelled else { return }
-                guard let text = TextCleaner.clean(raw) else {
+                guard let cleanedText = TextCleaner.clean(raw) else {
                     self.completeSession(id: id)
                     self.showNotice("No speech was recognized.", symbol: "waveform")
                     return
+                }
+                var text = cleanedText
+                if self.sessionSettings.cleanupEnabled, self.cleanupModelReady {
+                    self.overlay.show("Cleaning up…", symbol: "ellipsis.bubble", screen: self.activeScreen)
+                    text = (try? await self.cleaner.cleanup(cleanedText)) ?? cleanedText
+                    guard self.sessionID == id, !Task.isCancelled else { return }
                 }
                 let initialFocusUnavailable = self.insertionTarget?.focusedElement == nil
                 let pasted = self.insertionTarget.map {
@@ -426,6 +519,7 @@ final class AppController: ObservableObject {
         processingTask = nil
         phase = .idle
         overlay.hide()
+        if cleanupSyncPending { syncCleanupModel() }
     }
 
     func cancelSession(message: String? = nil) {
@@ -439,6 +533,7 @@ final class AppController: ObservableObject {
         startTask?.cancel()
         processingTask?.cancel()
         transcriber.cancel()
+        cleaner.cancel()
         phase = .cancelling
         overlay.hide()
         let cancellation = UUID()
@@ -450,6 +545,7 @@ final class AppController: ObservableObject {
             self.phase = .idle
             self.startTask = nil
             self.processingTask = nil
+            if self.cleanupSyncPending { self.syncCleanupModel() }
             if let message { self.showNotice(message, symbol: "exclamationmark.triangle") }
         }
     }
@@ -462,6 +558,7 @@ final class AppController: ObservableObject {
         pendingExpiryTask?.cancel()
         refreshDevicesAndDisplays()
         if !isBusy && !modelReady && !downloadingModel { prepareModel() }
+        if !isBusy && !cleanupModelReady && !downloadingCleanupModel { syncCleanupModel() }
     }
 
     func copyPendingTranscript() {
@@ -552,22 +649,27 @@ final class AppController: ObservableObject {
         quitting = true
         sessionID = nil
         modelOperationID = nil
+        cleanupModelOperationID = nil
         keyboard.stop()
         permissionTimer?.invalidate()
         guardTimer?.invalidate()
         startTask?.cancel()
         processingTask?.cancel()
         modelTask?.cancel()
+        cleanupModelTask?.cancel()
         overlayTask?.cancel()
         displayOverlayTask?.cancel()
         displayOverlays.forEach { $0.hide() }
         pendingExpiryTask?.cancel()
         models.cancelDownload()
+        cleanupModels.cancelDownload()
         transcriber.cancel()
+        cleaner.cancel()
         overlay.hide()
         pendingTranscript = nil
         insertion.restoreClipboardNow()
         await recorder.cancel()
         await transcriber.unload()
+        await cleaner.unload()
     }
 }

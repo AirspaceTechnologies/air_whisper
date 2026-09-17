@@ -55,3 +55,14 @@ Run `make all` for automated checks. Checked items record user-confirmed results
 - [ ] Diagnostics contain no audio or transcripts.
 - [ ] No network traffic during offline dictation or listening inference port.
 - [ ] New Application Support directories are owner-only.
+
+## Optional local AI cleanup
+
+- [ ] Upgrade from settings without cleanup fields; verify hotkey, microphone/display choices, model, and timings survive, with cleanup off.
+- [ ] Enable cleanup and explicitly download the model. Change an unrelated preference during download; progress must continue. Cancel/retry and toggle cleanup off/on while loading; readiness must match the latest setting.
+- [ ] Dictate two unrelated sentences consecutively; the second must not contain the first. Cancel during cleanup, then dictate again.
+- [ ] Confirm cleanup preserves names, negations, signed/decimal numbers, currency/percent, and email/URLs. Questions and commands in speech must be transcribed as text, not answered or followed.
+- [ ] Exercise a long transcript and a model failure. The original text must remain insertable/copyable rather than an empty or shortened result.
+- [ ] Disable cleanup and quit/reopen while a model is loading. Confirm the app quits and normal dictation remains available without cleanup.
+
+Automated native coverage uses synthetic typed sentences and a checksum-verified Qwen fixture; it does not complete these installed-app/hardware checks.

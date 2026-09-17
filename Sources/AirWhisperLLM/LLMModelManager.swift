@@ -2,38 +2,32 @@ import AirWhisperCore
 import Combine
 import Foundation
 
-/// Downloads only on an explicit request. Model and partial files never contain user audio.
-@MainActor public final class ModelManager: ObservableObject {
+/// Downloads only on an explicit request. The cleanup model never sees raw audio.
+@MainActor public final class LLMModelManager: ObservableObject {
     @Published public private(set) var progress: Double?
-    @Published public private(set) var status = "Choose a model to download, or use an existing model."
+    @Published public private(set) var status = "Choose a cleanup model to download."
     private let directory: URL
-    private let legacyDirectory: URL
     private var activeID: UUID?
     private var activeDownload: ModelDownload?
     private var validationTask: Task<Void, Error>?
 
     public convenience init() {
         let home = FileManager.default.homeDirectoryForCurrentUser
-        self.init(
-            directory: home.appendingPathComponent("Library/Application Support/Air Whisper/models", isDirectory: true),
-            legacyDirectory: home.appendingPathComponent(".dictate/models", isDirectory: true)
-        )
+        self.init(directory: home.appendingPathComponent("Library/Application Support/Air Whisper/models", isDirectory: true))
     }
 
-    init(directory: URL, legacyDirectory: URL) {
+    init(directory: URL) {
         self.directory = directory
-        self.legacyDirectory = legacyDirectory
     }
 
-    public func installedURL(for model: SpeechModel) -> URL? {
-        let manifest = ModelManifest.forModel(model)
-        return [directory, legacyDirectory]
-            .map { $0.appendingPathComponent(model.fileName) }
-            .first { ModelValidator.appearsInstalled($0, manifest: manifest) }
+    public func installedURL(for model: CleanupModel) -> URL? {
+        let manifest = LLMModelManifest.forModel(model)
+        let url = directory.appendingPathComponent(model.fileName)
+        return LLMModelValidator.appearsInstalled(url, manifest: manifest) ? url : nil
     }
 
-    public func download(_ model: SpeechModel) async throws -> URL {
-        guard activeID == nil else { throw SpeechError.downloadInProgress }
+    public func download(_ model: CleanupModel) async throws -> URL {
+        guard activeID == nil else { throw LLMError.downloadInProgress }
         try Task.checkCancellation()
         let id = UUID()
         activeID = id
@@ -64,9 +58,9 @@ import Foundation
             guard !download.isCanceled else { throw CancellationError() }
             status = "Checking \(model.title)…"
             progress = 0.99
-            let manifest = ModelManifest.forModel(model)
+            let manifest = LLMModelManifest.forModel(model)
             let validation = Task.detached(priority: .utility) {
-                try ModelValidator.validate(temporary, manifest: manifest) {
+                try LLMModelValidator.validate(temporary, manifest: manifest) {
                     try Task.checkCancellation()
                     if download.isCanceled { throw CancellationError() }
                 }
@@ -85,7 +79,7 @@ import Foundation
             return installed
         } catch {
             if error is CancellationError || (error as? URLError)?.code == .cancelled {
-                status = "Model download canceled."
+                status = "Cleanup model download canceled."
                 throw CancellationError()
             }
             status = error.localizedDescription
@@ -96,9 +90,5 @@ import Foundation
     public func cancelDownload() {
         activeDownload?.cancel()
         validationTask?.cancel()
-    }
-
-    static func promote(_ temporary: URL, to destination: URL) throws {
-        try ModelInstaller.promote(temporary, to: destination)
     }
 }

@@ -14,6 +14,8 @@ INFO_PATH="$APP_PATH/Contents/Info.plist"
 EXECUTABLE_PATH="$APP_PATH/Contents/MacOS/AirWhisper"
 FRAMEWORK_PATH="$APP_PATH/Contents/Frameworks/whisper.framework"
 LIBRARY_PATH="$FRAMEWORK_PATH/Versions/Current/whisper"
+LLAMA_FRAMEWORK_PATH="$APP_PATH/Contents/Frameworks/llama.framework"
+LLAMA_LIBRARY_PATH="$LLAMA_FRAMEWORK_PATH/Versions/Current/llama"
 
 [[ -f "$INFO_PATH" ]] || fail "missing Info.plist"
 /usr/bin/plutil -lint "$INFO_PATH" >/dev/null
@@ -26,14 +28,15 @@ plist_value() { /usr/libexec/PlistBuddy -c "Print :$1" "$INFO_PATH"; }
 [[ -n "$(plist_value NSMicrophoneUsageDescription)" ]] || fail "microphone permission explanation is missing"
 [[ -n "$(plist_value CFBundleShortVersionString)" && -n "$(plist_value CFBundleVersion)" ]] || fail "version metadata is missing"
 [[ -x "$EXECUTABLE_PATH" && -f "$LIBRARY_PATH" ]] || fail "executable or embedded whisper framework is missing"
+[[ -f "$LLAMA_LIBRARY_PATH" ]] || fail "embedded llama framework is missing"
 [[ -f "$APP_PATH/Contents/Resources/AppIcon.icns" ]] || fail "app icon is missing"
-for NOTICE in NOTICES.md whisper.cpp-LICENSE.txt Whisper-LICENSE.txt; do
+for NOTICE in NOTICES.md whisper.cpp-LICENSE.txt Whisper-LICENSE.txt llama.cpp-LICENSE.txt Qwen-LICENSE.txt; do
     [[ -s "$APP_PATH/Contents/Resources/ThirdParty/$NOTICE" ]] || fail "missing third-party notice: $NOTICE"
 done
 
 # No certificate or developer account is involved. Verify both the nested code and
 # the final resource seal before running even the noninteractive diagnostic.
-for SIGNED_PATH in "$FRAMEWORK_PATH" "$APP_PATH"; do
+for SIGNED_PATH in "$FRAMEWORK_PATH" "$LLAMA_FRAMEWORK_PATH" "$APP_PATH"; do
     /usr/bin/codesign --verify --deep --strict "$SIGNED_PATH"
     SIGNING_DETAILS="$(/usr/bin/codesign --display --verbose=4 "$SIGNED_PATH" 2>&1)"
     case "$SIGNING_DETAILS" in
@@ -42,14 +45,15 @@ for SIGNED_PATH in "$FRAMEWORK_PATH" "$APP_PATH"; do
     esac
 done
 
-# The app and official universal framework may reference only system libraries or
-# this embedded framework. Check every architecture reported by otool.
-for MACHO_PATH in "$EXECUTABLE_PATH" "$LIBRARY_PATH"; do
+# The app and official universal frameworks may reference only system libraries or
+# these embedded frameworks. Check every architecture reported by otool.
+for MACHO_PATH in "$EXECUTABLE_PATH" "$LIBRARY_PATH" "$LLAMA_LIBRARY_PATH"; do
     MACHO_DEPENDENCIES="$(/usr/bin/otool -L "$MACHO_PATH")"
     while IFS= read -r DEPENDENCY; do
         case "$DEPENDENCY" in
             /System/Library/*|/usr/lib/*) ;;
             @rpath/whisper.framework/Versions/Current/whisper|@rpath/whisper.framework/Versions/A/whisper) ;;
+            @rpath/llama.framework/Versions/Current/llama|@rpath/llama.framework/Versions/A/llama) ;;
             *) fail "unexpected runtime dependency in $MACHO_PATH: $DEPENDENCY" ;;
         esac
     done < <(printf '%s\n' "$MACHO_DEPENDENCIES" | awk '/^[[:space:]]/ { print $1 }')

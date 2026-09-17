@@ -50,6 +50,19 @@ public enum SpeechModel: String, CaseIterable, Codable, Sendable {
     }
 }
 
+/// A small local instruct model used only to restructure/clean up a finished transcript.
+/// Never used for transcription itself; whisper.cpp remains the only speech-to-text path.
+public enum CleanupModel: String, CaseIterable, Codable, Sendable {
+    case qwen2_5_1_5bInstruct
+
+    public var title: String { "Qwen2.5 1.5B Instruct" }
+    public var fileName: String { "qwen2.5-1.5b-instruct-q4_k_m.gguf" }
+    public var minimumBytes: Int64 { 1_000_000_000 }
+    public var downloadURL: URL {
+        URL(string: "https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF/resolve/91cad51170dc346986eccefdc2dd33a9da36ead9/\(fileName)")!
+    }
+}
+
 public struct AudioInputDevice: Identifiable, Hashable, Sendable {
     public let id: String
     public let name: String
@@ -85,6 +98,42 @@ public struct DictationSettings: Codable, Equatable, Sendable {
     public var minimumDuration: TimeInterval = 0.5
     public var maximumDuration: TimeInterval = 120
     public var restoreDelay: TimeInterval = 0.3
+    public var cleanupEnabled: Bool = false
+    public var cleanupModel: CleanupModel = .qwen2_5_1_5bInstruct
 
     public init() {}
+
+    private enum CodingKeys: String, CodingKey {
+        case hotkey, pasteMode, microphoneMode, fixedDeviceID, screenMicrophones, model
+        case minimumDuration, maximumDuration, restoreDelay, cleanupEnabled, cleanupModel
+    }
+
+    public init(from decoder: Decoder) throws {
+        self.init()
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        hotkey = try values.decodeIfPresent(PushToTalkKey.self, forKey: .hotkey) ?? hotkey
+        pasteMode = try values.decodeIfPresent(PasteMode.self, forKey: .pasteMode) ?? pasteMode
+        microphoneMode = try values.decodeIfPresent(MicrophoneMode.self, forKey: .microphoneMode) ?? microphoneMode
+        fixedDeviceID = try values.decodeIfPresent(String.self, forKey: .fixedDeviceID)
+        screenMicrophones = try values.decodeIfPresent([String: String].self, forKey: .screenMicrophones) ?? screenMicrophones
+        model = try values.decodeIfPresent(SpeechModel.self, forKey: .model) ?? model
+        minimumDuration = try values.decodeIfPresent(TimeInterval.self, forKey: .minimumDuration) ?? minimumDuration
+        maximumDuration = try values.decodeIfPresent(TimeInterval.self, forKey: .maximumDuration) ?? maximumDuration
+        restoreDelay = try values.decodeIfPresent(TimeInterval.self, forKey: .restoreDelay) ?? restoreDelay
+        // Settings written before AI cleanup keep their values and do not opt users in.
+        cleanupEnabled = try values.decodeIfPresent(Bool.self, forKey: .cleanupEnabled) ?? false
+        cleanupModel = try values.decodeIfPresent(CleanupModel.self, forKey: .cleanupModel) ?? cleanupModel
+    }
+}
+
+/// Observe only cleanup-specific settings so microphone/hotkey changes cannot
+/// cancel a download or reload a resident model.
+public struct CleanupConfiguration: Equatable, Sendable {
+    public let enabled: Bool
+    public let model: CleanupModel
+
+    public init(_ settings: DictationSettings) {
+        enabled = settings.cleanupEnabled
+        model = settings.cleanupModel
+    }
 }

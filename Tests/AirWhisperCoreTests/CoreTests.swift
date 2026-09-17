@@ -61,3 +61,34 @@ final class CoreTests: XCTestCase {
         XCTAssertEqual(PushToTalkKey.rightctrl.rawMask & 0x01, 0) // left Control
     }
 }
+
+final class CleanupSettingsCompatibilityTests: XCTestCase {
+    func testLegacySettingsRemainIntactWithoutOptingIntoCleanup() throws {
+        let json = #"{"hotkey":"rightalt","pasteMode":"keystrokes","microphoneMode":"fixed","fixedDeviceID":"fixture-mic","screenMicrophones":{"display":"fixture-mic"},"model":"mediumEnglish","minimumDuration":0.8,"maximumDuration":90,"restoreDelay":0.7}"#
+        let settings = try JSONDecoder().decode(DictationSettings.self, from: Data(json.utf8))
+        XCTAssertEqual(settings.hotkey, .rightalt)
+        XCTAssertEqual(settings.pasteMode, .keystrokes)
+        XCTAssertEqual(settings.microphoneMode, .fixed)
+        XCTAssertEqual(settings.fixedDeviceID, "fixture-mic")
+        XCTAssertEqual(settings.screenMicrophones, ["display": "fixture-mic"])
+        XCTAssertEqual(settings.model, .mediumEnglish)
+        XCTAssertEqual(settings.minimumDuration, 0.8)
+        XCTAssertEqual(settings.maximumDuration, 90)
+        XCTAssertEqual(settings.restoreDelay, 0.7)
+        XCTAssertFalse(settings.cleanupEnabled)
+        XCTAssertEqual(settings.cleanupModel, .qwen2_5_1_5bInstruct)
+    }
+
+    func testCleanupPreferenceRoundTripsAndUnrelatedSettingsDoNotChangeItsConfiguration() throws {
+        var settings = DictationSettings()
+        settings.cleanupEnabled = true
+        let decoded = try JSONDecoder().decode(DictationSettings.self, from: JSONEncoder().encode(settings))
+        XCTAssertEqual(decoded, settings)
+        let configuration = CleanupConfiguration(settings)
+        settings.hotkey = .rightcmd
+        settings.fixedDeviceID = "different-microphone"
+        XCTAssertEqual(CleanupConfiguration(settings), configuration)
+        settings.cleanupEnabled = false
+        XCTAssertNotEqual(CleanupConfiguration(settings), configuration)
+    }
+}
