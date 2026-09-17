@@ -77,10 +77,19 @@ final class AppController: ObservableObject {
     var setupComplete: Bool { microphoneAuthorized && accessibilityAuthorized && hotkeyActive && modelReady }
     var statusText: String {
         if isBusy { return phase.title }
+        if !accessibilityAuthorized { return "Accessibility access required — open Air Whisper Settings." }
+        if !microphoneAuthorized { return "Microphone access required — open Air Whisper Settings." }
+        if suspended { return "Dictation is paused while this Mac is inactive." }
+        if !hotkeyActive {
+            return monitoringAuthorized
+                ? "Keyboard shortcut unavailable — reopen Air Whisper."
+                : "Input Monitoring access required — open Air Whisper Settings."
+        }
         if preparingModel { return "Loading transcription model…" }
         if downloadingModel { return "Downloading transcription model…" }
         if let message { return message }
-        return setupComplete ? "Hold \(settings.value.hotkey.title) to dictate" : "Complete setup to start dictating"
+        if !modelReady { return "Transcription model required — open Air Whisper Settings." }
+        return "Hold \(settings.value.hotkey.title) to dictate"
     }
 
     func launch() {

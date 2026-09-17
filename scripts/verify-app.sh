@@ -27,9 +27,17 @@ plist_value() { /usr/libexec/PlistBuddy -c "Print :$1" "$INFO_PATH"; }
 [[ -n "$(plist_value CFBundleShortVersionString)" && -n "$(plist_value CFBundleVersion)" ]] || fail "version metadata is missing"
 [[ -x "$EXECUTABLE_PATH" && -f "$LIBRARY_PATH" ]] || fail "executable or embedded whisper framework is missing"
 [[ -f "$APP_PATH/Contents/Resources/AppIcon.icns" ]] || fail "app icon is missing"
+[[ -s "$APP_PATH/Contents/Resources/LICENSE" ]] || fail "missing Air Whisper license"
+/usr/bin/cmp -s "$REPO_DIR/LICENSE" "$APP_PATH/Contents/Resources/LICENSE" || fail "packaged project license does not match the source"
 for NOTICE in NOTICES.md whisper.cpp-LICENSE.txt Whisper-LICENSE.txt; do
     [[ -s "$APP_PATH/Contents/Resources/ThirdParty/$NOTICE" ]] || fail "missing third-party notice: $NOTICE"
 done
+
+# Only inspect our executable: upstream frameworks may retain their own public
+# build paths. The packaged app must not expose a developer's home directory.
+if LC_ALL=C /usr/bin/grep -a -Fq '/Users/' "$EXECUTABLE_PATH"; then
+    fail "developer home path found in the app executable"
+fi
 
 # No certificate or developer account is involved. Verify both the nested code and
 # the final resource seal before running even the noninteractive diagnostic.

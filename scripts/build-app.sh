@@ -18,6 +18,9 @@ mkdir -p "$REPO_DIR/dist"
 rm -rf "$APP_DIR"
 mkdir -p "$APP_DIR/Contents/MacOS" "$APP_DIR/Contents/Frameworks" "$APP_DIR/Contents/Resources"
 cp "$BIN_DIR/AirWhisper" "$APP_DIR/Contents/MacOS/AirWhisper"
+# Remove compiler object-file paths from the distributed executable. The original
+# SwiftPM build products retain their debugging information for local development.
+/usr/bin/strip -S "$APP_DIR/Contents/MacOS/AirWhisper"
 # SwiftPM may add the build machine's Xcode toolchain as a library search path.
 # The distributed app resolves only OS libraries and its own embedded framework.
 while IFS= read -r SEARCH_PATH; do
@@ -31,14 +34,18 @@ cp "$REPO_DIR/Resources/Info.plist" "$APP_DIR/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $AIR_WHISPER_APP_BUILD" "$APP_DIR/Contents/Info.plist"
 ditto "$FRAMEWORK_SOURCE" "$APP_DIR/Contents/Frameworks/whisper.framework"
 ditto "$REPO_DIR/ThirdParty" "$APP_DIR/Contents/Resources/ThirdParty"
+cp "$REPO_DIR/LICENSE" "$APP_DIR/Contents/Resources/LICENSE"
 mkdir -p "$REPO_DIR/.build/AppIcon.iconset"
 CLANG_MODULE_CACHE_PATH="$REPO_DIR/.build/ModuleCache" /usr/bin/swift "$REPO_DIR/scripts/make-icon.swift" "$REPO_DIR/.build/AppIcon.iconset"
 iconutil -c icns "$REPO_DIR/.build/AppIcon.iconset" -o "$APP_DIR/Contents/Resources/AppIcon.icns"
+# This is a newly generated bundle. Do not distribute build-machine Finder,
+# provenance or download attributes; user download quarantine still applies later.
+/usr/bin/xattr -cr "$APP_DIR"
 # '-' is a local ad hoc signature, with no certificate, account, or notarization.
 codesign --force --sign - "$APP_DIR/Contents/Frameworks/whisper.framework"
 codesign --force --sign - "$APP_DIR"
 "$REPO_DIR/scripts/verify-app.sh" "$APP_DIR"
-ditto -c -k --sequesterRsrc --keepParent "$APP_DIR" "$REPO_DIR/dist/Air-Whisper.zip"
+ditto -c -k --norsrc --noextattr --noacl --keepParent "$APP_DIR" "$REPO_DIR/dist/Air-Whisper.zip"
 (
     cd "$REPO_DIR/dist"
     shasum -a 256 Air-Whisper.zip > SHA256SUMS

@@ -49,6 +49,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     func menuNeedsUpdate(_ menu: NSMenu) {
         menu.removeAllItems()
+        let version = NSMenuItem(title: AppVersion.appTitle, action: nil, keyEquivalent: "")
+        version.isEnabled = false
+        menu.addItem(version)
         let status = NSMenuItem(title: controller.statusText, action: nil, keyEquivalent: "")
         status.isEnabled = false
         menu.addItem(status)
@@ -77,7 +80,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         case .idle: symbol = controller.setupComplete ? "mic" : "mic.badge.xmark"
         }
         statusItem.button?.image = NSImage(systemSymbolName: symbol, accessibilityDescription: controller.statusText)
-        statusItem.button?.toolTip = "Air Whisper — \(controller.statusText)"
+        statusItem.button?.toolTip = "\(AppVersion.appTitle) — \(controller.statusText)"
     }
 
     @objc private func showSettings() {

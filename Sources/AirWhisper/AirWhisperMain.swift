@@ -1,4 +1,5 @@
 import AppKit
+import ApplicationServices
 import AVFoundation
 import AirWhisperCore
 import AirWhisperSpeech
@@ -8,6 +9,27 @@ enum AirWhisperMain {
     @MainActor
     static func main() async {
         let arguments = Array(CommandLine.arguments.dropFirst())
+        if arguments.contains("--permission-status") {
+            // Read authorization only, before creating the app or any input services.
+            // None of these checks request access or open a device.
+            print(AppVersion.appTitle)
+            print("Accessibility: \(AXIsProcessTrusted() ? "authorized" : "not authorized")")
+            print("Input Monitoring: \(CGPreflightListenEventAccess() ? "authorized" : "not authorized")")
+            let microphoneStatus: String
+            switch AVCaptureDevice.authorizationStatus(for: .audio) {
+            case .authorized: microphoneStatus = "authorized"
+            case .denied: microphoneStatus = "denied"
+            case .restricted: microphoneStatus = "restricted"
+            case .notDetermined: microphoneStatus = "not determined"
+            @unknown default: microphoneStatus = "unknown"
+            }
+            print("Microphone: \(microphoneStatus)")
+            return
+        }
+        if arguments.contains("--version") {
+            print(AppVersion.appTitle)
+            return
+        }
         if arguments.contains("--self-check") {
             // This path deliberately avoids controller, audio-device discovery, settings,
             // microphone authorization, event taps, model downloads, and the app loop.
@@ -20,7 +42,8 @@ enum AirWhisperMain {
             return
         }
         if arguments.contains("--help") || arguments.contains("-h") {
-            print("AirWhisper [--self-check | --transcribe-file PATH --model MODEL_PATH [--expect-text TEXT]]")
+            print("AirWhisper [--version | --permission-status | --self-check | --transcribe-file PATH --model MODEL_PATH [--expect-text TEXT]]")
+            print("--permission-status reports access for this process without requesting permissions or opening audio devices.")
             print("The file check reports success and transcript length only; it does not print speech content.")
             return
         }

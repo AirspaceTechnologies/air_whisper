@@ -14,8 +14,8 @@ final class AccessibilityPreparationTests: XCTestCase {
         var writes: [pid_t] = []
         let preparation = AccessibilityPreparation(
             isTrusted: { true },
-            capability: { reads.append($0); return .disabled },
-            enable: { writes.append($0); return true }
+            capability: { processID, _ in reads.append(processID); return .disabled },
+            enable: { processID, _ in writes.append(processID); return true }
         )
 
         preparation.prepare(process)
@@ -32,8 +32,8 @@ final class AccessibilityPreparationTests: XCTestCase {
         var writes = 0
         let preparation = AccessibilityPreparation(
             isTrusted: { true },
-            capability: { _ in reads += 1; return .enabled },
-            enable: { _ in writes += 1; return true }
+            capability: { _, _ in reads += 1; return .enabled },
+            enable: { _, _ in writes += 1; return true }
         )
 
         preparation.prepare(process)
@@ -50,8 +50,8 @@ final class AccessibilityPreparationTests: XCTestCase {
         var writes = 0
         let preparation = AccessibilityPreparation(
             isTrusted: { trusted },
-            capability: { _ in reads += 1; return .disabled },
-            enable: { _ in writes += 1; return true }
+            capability: { _, _ in reads += 1; return .disabled },
+            enable: { _, _ in writes += 1; return true }
         )
 
         preparation.prepare(process)
@@ -72,8 +72,8 @@ final class AccessibilityPreparationTests: XCTestCase {
         var writes = 0
         let preparation = AccessibilityPreparation(
             isTrusted: { true },
-            capability: { _ in reads += 1; return .unsupported },
-            enable: { _ in writes += 1; return true }
+            capability: { _, _ in reads += 1; return .unsupported },
+            enable: { _, _ in writes += 1; return true }
         )
 
         preparation.prepare(process)
@@ -90,8 +90,8 @@ final class AccessibilityPreparationTests: XCTestCase {
         var writes = 0
         let preparation = AccessibilityPreparation(
             isTrusted: { true },
-            capability: { _ in reads += 1; return available ? .disabled : .unavailable },
-            enable: { _ in writes += 1; return true }
+            capability: { _, _ in reads += 1; return available ? .disabled : .unavailable },
+            enable: { _, _ in writes += 1; return true }
         )
 
         preparation.prepare(process)
@@ -109,8 +109,8 @@ final class AccessibilityPreparationTests: XCTestCase {
         var writes = 0
         let preparation = AccessibilityPreparation(
             isTrusted: { true },
-            capability: { _ in .disabled },
-            enable: { _ in writes += 1; return writes > 1 }
+            capability: { _, _ in .disabled },
+            enable: { _, _ in writes += 1; return writes > 1 }
         )
 
         preparation.prepare(process)
@@ -125,8 +125,8 @@ final class AccessibilityPreparationTests: XCTestCase {
         var writes = 0
         let preparation = AccessibilityPreparation(
             isTrusted: { true },
-            capability: { _ in .disabled },
-            enable: { _ in writes += 1; return true }
+            capability: { _, _ in .disabled },
+            enable: { _, _ in writes += 1; return true }
         )
         let relaunched = AccessibilityPreparation.ProcessIdentity(
             processID: process.processID, launchDate: Date(timeIntervalSince1970: 2_000)
@@ -144,8 +144,8 @@ final class AccessibilityPreparationTests: XCTestCase {
         var writes: [pid_t] = []
         let preparation = AccessibilityPreparation(
             isTrusted: { true },
-            capability: { _ in .disabled },
-            enable: { writes.append($0); return true }
+            capability: { _, _ in .disabled },
+            enable: { processID, _ in writes.append(processID); return true }
         )
         let other = AccessibilityPreparation.ProcessIdentity(processID: 43, launchDate: nil)
 
@@ -156,6 +156,179 @@ final class AccessibilityPreparationTests: XCTestCase {
         preparation.prepare(process)
 
         XCTAssertEqual(writes, [process.processID, other.processID, process.processID])
+    }
+
+    @MainActor
+    func testChromeChannelsAndChromiumRequestEnhancedAccessibilityOnlyOnce() {
+        for bundleIdentifier in ["com.google.Chrome", "com.google.Chrome.beta", "com.google.Chrome.dev",
+                                 "com.google.Chrome.canary", "org.chromium.Chromium"] {
+            var reads: [AccessibilityPreparation.Attribute] = []
+            var writes: [AccessibilityPreparation.Attribute] = []
+            let preparation = AccessibilityPreparation(
+                isTrusted: { true },
+                capability: { _, attribute in
+                    reads.append(attribute)
+                    return attribute == .manualAccessibility ? .unsupported : .disabled
+                },
+                enable: { processID, attribute in
+                    XCTAssertEqual(processID, self.process.processID)
+                    writes.append(attribute)
+                    return true
+                }
+            )
+
+            preparation.prepare(process, bundleIdentifier: bundleIdentifier)
+            preparation.prepare(process, bundleIdentifier: bundleIdentifier)
+            preparation.prepare(process, bundleIdentifier: bundleIdentifier)
+
+            XCTAssertEqual(reads, [.manualAccessibility, .enhancedUserInterface], bundleIdentifier)
+            XCTAssertEqual(writes, [.enhancedUserInterface], "Do not restart Chromium's debounce: \(bundleIdentifier)")
+        }
+    }
+
+    @MainActor
+    func testUnknownAndNativeAppsDoNotReceiveChromeFallback() {
+        let bundleIdentifiers: [String?] = [nil, "com.apple.TextEdit", "com.tinyspeck.slackmacgap",
+                                            "com.google.Chrome.helper", "com.google.Chrome.unrecognized"]
+        for bundleIdentifier in bundleIdentifiers {
+            var reads: [AccessibilityPreparation.Attribute] = []
+            var writes: [AccessibilityPreparation.Attribute] = []
+            let preparation = AccessibilityPreparation(
+                isTrusted: { true },
+                capability: { _, attribute in
+                    reads.append(attribute)
+                    return .unsupported
+                },
+                enable: { _, attribute in writes.append(attribute); return true }
+            )
+
+            preparation.prepare(process, bundleIdentifier: bundleIdentifier)
+            preparation.prepare(process, bundleIdentifier: bundleIdentifier)
+
+            XCTAssertEqual(reads, [.manualAccessibility])
+            XCTAssertTrue(writes.isEmpty, "A generic AppKit enhanced UI attribute does not identify a Chromium browser.")
+        }
+    }
+
+    @MainActor
+    func testManualAccessibilityTakesPrecedenceOverChromeFallback() {
+        for alreadyEnabled in [false, true] {
+            var reads: [AccessibilityPreparation.Attribute] = []
+            var writes: [AccessibilityPreparation.Attribute] = []
+            let preparation = AccessibilityPreparation(
+                isTrusted: { true },
+                capability: { _, attribute in
+                    reads.append(attribute)
+                    return alreadyEnabled ? .enabled : .disabled
+                },
+                enable: { _, attribute in writes.append(attribute); return true }
+            )
+
+            preparation.prepare(process, bundleIdentifier: "com.google.Chrome")
+            preparation.prepare(process, bundleIdentifier: "com.google.Chrome")
+
+            XCTAssertEqual(reads, [.manualAccessibility])
+            XCTAssertEqual(writes, alreadyEnabled ? [] : [.manualAccessibility])
+        }
+    }
+
+    @MainActor
+    func testEnhancedAppKitValueDoesNotSkipChromiumOptIn() {
+        var writes: [AccessibilityPreparation.Attribute] = []
+        let preparation = AccessibilityPreparation(
+            isTrusted: { true },
+            capability: { _, attribute in attribute == .manualAccessibility ? .unsupported : .enabled },
+            enable: { _, attribute in writes.append(attribute); return true }
+        )
+
+        preparation.prepare(process, bundleIdentifier: "com.google.Chrome")
+        preparation.prepare(process, bundleIdentifier: "com.google.Chrome")
+
+        XCTAssertEqual(writes, [.enhancedUserInterface],
+                       "Chrome's web AX mode is separate from its inherited AppKit attribute value.")
+    }
+
+    @MainActor
+    func testTransientCapabilitiesRetryWithoutPrematureChromeFallback() {
+        var attempt = 0
+        var reads: [AccessibilityPreparation.Attribute] = []
+        var writes: [AccessibilityPreparation.Attribute] = []
+        let preparation = AccessibilityPreparation(
+            isTrusted: { true },
+            capability: { _, attribute in
+                reads.append(attribute)
+                if attempt == 0 { return .unavailable }
+                if attribute == .manualAccessibility { return .unsupported }
+                return attempt == 1 ? .unavailable : .disabled
+            },
+            enable: { _, attribute in writes.append(attribute); return true }
+        )
+
+        preparation.prepare(process, bundleIdentifier: "com.google.Chrome")
+        XCTAssertEqual(reads, [.manualAccessibility])
+        XCTAssertTrue(writes.isEmpty)
+        attempt = 1
+        preparation.prepare(process, bundleIdentifier: "com.google.Chrome")
+        XCTAssertTrue(writes.isEmpty)
+        attempt = 2
+        preparation.prepare(process, bundleIdentifier: "com.google.Chrome")
+        preparation.prepare(process, bundleIdentifier: "com.google.Chrome")
+
+        XCTAssertEqual(reads, [.manualAccessibility,
+                               .manualAccessibility, .enhancedUserInterface,
+                               .manualAccessibility, .enhancedUserInterface])
+        XCTAssertEqual(writes, [.enhancedUserInterface])
+    }
+
+    @MainActor
+    func testFailedManualEnableDoesNotFallBackToAnotherOptIn() {
+        var reads: [AccessibilityPreparation.Attribute] = []
+        var writes: [AccessibilityPreparation.Attribute] = []
+        let preparation = AccessibilityPreparation(
+            isTrusted: { true },
+            capability: { _, attribute in reads.append(attribute); return .disabled },
+            enable: { _, attribute in writes.append(attribute); return writes.count > 1 }
+        )
+
+        preparation.prepare(process, bundleIdentifier: "com.google.Chrome")
+        preparation.prepare(process, bundleIdentifier: "com.google.Chrome")
+        preparation.prepare(process, bundleIdentifier: "com.google.Chrome")
+
+        XCTAssertEqual(reads, [.manualAccessibility, .manualAccessibility])
+        XCTAssertEqual(writes, [.manualAccessibility, .manualAccessibility])
+    }
+
+    @MainActor
+    func testFailedEnhancedEnableIsRetriedUntilOneRequestSucceeds() {
+        var writes: [AccessibilityPreparation.Attribute] = []
+        let preparation = AccessibilityPreparation(
+            isTrusted: { true },
+            capability: { _, attribute in attribute == .manualAccessibility ? .unsupported : .disabled },
+            enable: { _, attribute in writes.append(attribute); return writes.count > 1 }
+        )
+
+        preparation.prepare(process, bundleIdentifier: "com.google.Chrome")
+        preparation.prepare(process, bundleIdentifier: "com.google.Chrome")
+        preparation.prepare(process, bundleIdentifier: "com.google.Chrome")
+
+        XCTAssertEqual(writes, [.enhancedUserInterface, .enhancedUserInterface])
+    }
+
+    @MainActor
+    func testChromeWithNeitherCapabilityIsRememberedWithoutWriting() {
+        var reads: [AccessibilityPreparation.Attribute] = []
+        var writes = 0
+        let preparation = AccessibilityPreparation(
+            isTrusted: { true },
+            capability: { _, attribute in reads.append(attribute); return .unsupported },
+            enable: { _, _ in writes += 1; return true }
+        )
+
+        preparation.prepare(process, bundleIdentifier: "com.google.Chrome")
+        preparation.prepare(process, bundleIdentifier: "com.google.Chrome")
+
+        XCTAssertEqual(reads, [.manualAccessibility, .enhancedUserInterface])
+        XCTAssertEqual(writes, 0)
     }
 
     func testExactOriginalFocusStillMatches() {
@@ -198,21 +371,25 @@ final class AccessibilityPreparationTests: XCTestCase {
 
     @MainActor
     func testPreparationCannotAdoptAFocusThatAppearedAfterOriginalCapture() {
-        let original = InsertionTarget(processID: process.processID, focusedElement: nil)
-        var current = original
-        let preparation = AccessibilityPreparation(
-            isTrusted: { true },
-            capability: { _ in .disabled },
-            enable: { processID in
-                current = InsertionTarget(processID: processID, focusedElement: AXUIElementCreateApplication(424_242))
-                return true
-            }
-        )
+        for useChromeFallback in [false, true] {
+            let original = InsertionTarget(processID: process.processID, focusedElement: nil)
+            var current = original
+            let preparation = AccessibilityPreparation(
+                isTrusted: { true },
+                capability: { _, attribute in
+                    useChromeFallback && attribute == .manualAccessibility ? .unsupported : .disabled
+                },
+                enable: { processID, _ in
+                    current = InsertionTarget(processID: processID, focusedElement: AXUIElementCreateApplication(424_242))
+                    return true
+                }
+            )
 
-        XCTAssertFalse(original.matches(current), "Two unknown focus values are not proof of a safe target.")
-        preparation.prepare(process)
-        XCTAssertNotNil(current.focusedElement)
-        XCTAssertNil(original.focusedElement)
-        XCTAssertFalse(original.matches(current), "Enabling accessibility must never authorize a later field for an existing dictation.")
+            XCTAssertFalse(original.matches(current), "Two unknown focus values are not proof of a safe target.")
+            preparation.prepare(process, bundleIdentifier: useChromeFallback ? "com.google.Chrome" : nil)
+            XCTAssertNotNil(current.focusedElement)
+            XCTAssertNil(original.focusedElement)
+            XCTAssertFalse(original.matches(current), "Enabling accessibility must never authorize a later field for an existing dictation.")
+        }
     }
 }
