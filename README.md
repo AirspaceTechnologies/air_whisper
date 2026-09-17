@@ -47,6 +47,7 @@ This refreshes Air Whisper's Accessibility permission and preserves your models 
 - Pick a fixed mic or use **Auto** with per-display assignments. Choices persist by native device ID, so duplicate names and enumeration order do not swap the assignments. Initial display-to-microphone assignment is manual.
 - Automatic fallback prefers built-in audio over a Bluetooth headset mic. Explicit selections are honored.
 - Launch at login is a user-controlled setting.
+- Add names or jargon under **Settings → Preferences → Vocabulary**, separated by commas or new lines. These are optional spelling hints, not guaranteed replacements. Put important terms first: at most 400 characters (1,600 UTF-8 bytes) are considered, and only the first 128 model tokens are passed to the decoder. Short, relevant lists work best; clear the field if hints reduce accuracy. Each recording uses the vocabulary present when you pressed the key.
 - Open settings, reset dictation, or quit from the microphone icon in the menu bar. Closing Settings does not quit the app.
 
 ## Build without a developer account
@@ -115,6 +116,7 @@ This creates a draft for review. Check its version, commit, notes, and attached 
 - Explicit model downloads contact Hugging Face and its download hosting. Exact file size and SHA-256 are verified before atomic installation; dictation then works offline.
 - New models live in `~/Library/Application Support/Air Whisper/models` in private app directories. Legacy models are read without being moved or deleted.
 - Settings use the app's macOS preferences. Diagnostics omit audio and transcript content. The explicit `--transcribe-file` diagnostic reports the supplied file's duration and recognized character count.
+- Vocabulary is stored with those local preferences and used only by on-device transcription. It is not uploaded or logged. Existing hotkey, microphone and model preferences are preserved when upgrading from a version without vocabulary.
 - The model stays loaded for responsive dictation. Medium English needs more RAM and processing time than Small English.
 
 ## Validation and troubleshooting

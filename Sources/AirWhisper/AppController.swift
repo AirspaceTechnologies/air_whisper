@@ -385,7 +385,8 @@ final class AppController: ObservableObject {
                 }
                 self.phase = .transcribing
                 self.overlay.show("Transcribing…", symbol: "ellipsis.bubble", screen: self.activeScreen)
-                let raw = try await self.transcriber.transcribe(audio, language: "en")
+                let raw = try await self.transcriber.transcribe(audio, language: "en",
+                                                               initialPrompt: self.sessionSettings.vocabulary)
                 guard self.sessionID == id, !Task.isCancelled else { return }
                 guard let text = TextCleaner.clean(raw) else {
                     self.completeSession(id: id)

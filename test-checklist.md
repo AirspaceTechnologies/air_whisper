@@ -38,6 +38,9 @@ Run `make all` for automated checks. Checked items record user-confirmed results
 - [ ] Keystroke mode works in an app blocking paste.
 - [ ] The overlay never steals focus and follows the correct display/Space/fullscreen app.
 - [ ] UI stays responsive while hashing, loading and transcribing.
+- [ ] Upgrade from a build without Vocabulary and verify the selected key, microphone, model and timing settings survive.
+- [ ] Enter vocabulary with commas, new lines and accented names; relaunch and check it persists. Compare a relevant phrase with and without hints, then clear the field and check ordinary dictation again.
+- [ ] With vocabulary enabled, verify silent/background-only recordings do not insert the hint list; cancel transcription and confirm the next take still works.
 
 ## Devices and recovery
 
