@@ -9,6 +9,8 @@ public enum LLMError: LocalizedError {
     case modelLoadFailed
     case contextCreationFailed
     case tokenizationFailed
+    case unsafeOutput
+    case transcriptTooLong
     case inferenceFailed
     case timedOut
     case downloadInProgress
@@ -16,12 +18,14 @@ public enum LLMError: LocalizedError {
 
     public var errorDescription: String? {
         switch self {
-        case .unsupportedModel: return "Choose an official, unquantized cleanup model."
+        case .unsupportedModel: return "Choose the supported official Qwen2.5 1.5B Instruct Q4_K_M GGUF model."
         case .invalidModel: return "The cleanup model is incomplete or failed its SHA256 check. Download it again."
         case .modelNotLoaded: return "Choose and prepare a cleanup model before enabling AI cleanup."
         case .modelLoadFailed: return "The cleanup model could not be loaded. Free some memory and try again."
         case .contextCreationFailed: return "The cleanup model's context could not be created."
         case .tokenizationFailed: return "The transcript could not be tokenized for cleanup."
+        case .unsafeOutput: return "Cleanup changed or omitted words. The original transcript was used instead."
+        case .transcriptTooLong: return "This transcript exceeds the cleanup limit. The original transcript was used instead."
         case .inferenceFailed: return "Transcript cleanup failed. The original transcript was used instead."
         case .timedOut: return "Transcript cleanup took too long and was canceled."
         case .downloadInProgress: return "A cleanup model download is already running."

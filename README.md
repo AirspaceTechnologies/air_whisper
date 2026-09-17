@@ -155,3 +155,9 @@ Turn off **Launch Air Whisper at login** in Preferences, choose **microphone men
 | `Tests` | Automated regression coverage |
 | `ThirdParty` | Pinned dependency details and licenses |
 | `legacy` | Original Hammerspoon implementation |
+
+## Optional AI cleanup
+
+Dictation works without a cleanup model. In **Settings → Preferences → AI cleanup**, you can enable local punctuation and capitalization cleanup and download **Qwen2.5 1.5B Instruct Q4_K_M** (about 1.1 GB). The setting is off by default, including when updating from an older version; the download starts only when you click **Download Cleanup Model**.
+
+Cleanup adds processing time and memory use. It preserves substantive words in their original order and can remove hesitation sounds such as “um” and “uh.” If the model is unavailable, times out, returns incomplete output, or changes words, Air Whisper uses the original transcript. Review the result before sending it: punctuation can still change meaning. Disabling cleanup unloads its model. Audio and transcript inference remain on this Mac; internet access is needed only to download models.

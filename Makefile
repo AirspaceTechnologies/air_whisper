@@ -14,6 +14,7 @@ build: bootstrap
 
 test-bootstrap:
 	./scripts/test-bootstrap-whisper.sh
+	./scripts/test-bootstrap-llama.sh
 
 test: test-bootstrap bootstrap
 	./scripts/swift.sh test

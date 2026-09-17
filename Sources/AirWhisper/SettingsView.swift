@@ -219,9 +219,9 @@ struct SettingsView: View {
                     VStack(alignment: .leading, spacing: 12) {
                         Toggle("Clean up dictated text with a local AI model", isOn: Binding(
                             get: { settings.value.cleanupEnabled },
-                            set: { settings.value.cleanupEnabled = $0; controller.syncCleanupModel() }
+                            set: { settings.value.cleanupEnabled = $0 }
                         )).disabled(controller.isBusy)
-                        Text("Fixes punctuation, capitalization, and filler words after transcription. Runs entirely on this Mac using a small local model; nothing is sent anywhere.")
+                        Text("Adjusts punctuation and capitalization and removes hesitation sounds after transcription. Runs entirely on this Mac using a small local model; nothing is sent anywhere.")
                             .font(.callout).foregroundStyle(.secondary)
                         if settings.value.cleanupEnabled {
                             if controller.downloadingCleanupModel {
@@ -243,7 +243,7 @@ struct SettingsView: View {
                                     Button(controller.currentCleanupModelURL == nil ? "Download Cleanup Model" : "Download Again") { controller.downloadCleanupModel() }
                                 }.disabled(controller.isBusy)
                             }
-                            Text("Qwen2.5 1.5B Instruct · about 1 GB. If cleanup fails for any reason, the original transcript is used instead.")
+                            Text("Qwen2.5 1.5B Instruct · about 1 GB. Edits that change words or exceed the time or length limit are rejected. The original transcript is used if cleanup is unavailable or fails.")
                                 .font(.caption).foregroundStyle(.secondary)
                         }
                     }.padding(8)

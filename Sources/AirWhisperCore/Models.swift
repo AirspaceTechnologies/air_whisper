@@ -102,4 +102,38 @@ public struct DictationSettings: Codable, Equatable, Sendable {
     public var cleanupModel: CleanupModel = .qwen2_5_1_5bInstruct
 
     public init() {}
+
+    private enum CodingKeys: String, CodingKey {
+        case hotkey, pasteMode, microphoneMode, fixedDeviceID, screenMicrophones, model
+        case minimumDuration, maximumDuration, restoreDelay, cleanupEnabled, cleanupModel
+    }
+
+    public init(from decoder: Decoder) throws {
+        self.init()
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        hotkey = try values.decodeIfPresent(PushToTalkKey.self, forKey: .hotkey) ?? hotkey
+        pasteMode = try values.decodeIfPresent(PasteMode.self, forKey: .pasteMode) ?? pasteMode
+        microphoneMode = try values.decodeIfPresent(MicrophoneMode.self, forKey: .microphoneMode) ?? microphoneMode
+        fixedDeviceID = try values.decodeIfPresent(String.self, forKey: .fixedDeviceID)
+        screenMicrophones = try values.decodeIfPresent([String: String].self, forKey: .screenMicrophones) ?? screenMicrophones
+        model = try values.decodeIfPresent(SpeechModel.self, forKey: .model) ?? model
+        minimumDuration = try values.decodeIfPresent(TimeInterval.self, forKey: .minimumDuration) ?? minimumDuration
+        maximumDuration = try values.decodeIfPresent(TimeInterval.self, forKey: .maximumDuration) ?? maximumDuration
+        restoreDelay = try values.decodeIfPresent(TimeInterval.self, forKey: .restoreDelay) ?? restoreDelay
+        // Settings written before AI cleanup keep their values and do not opt users in.
+        cleanupEnabled = try values.decodeIfPresent(Bool.self, forKey: .cleanupEnabled) ?? false
+        cleanupModel = try values.decodeIfPresent(CleanupModel.self, forKey: .cleanupModel) ?? cleanupModel
+    }
+}
+
+/// Observe only cleanup-specific settings so microphone/hotkey changes cannot
+/// cancel a download or reload a resident model.
+public struct CleanupConfiguration: Equatable, Sendable {
+    public let enabled: Bool
+    public let model: CleanupModel
+
+    public init(_ settings: DictationSettings) {
+        enabled = settings.cleanupEnabled
+        model = settings.cleanupModel
+    }
 }
