@@ -68,4 +68,48 @@ final class CoreTests: XCTestCase {
         let long = String(repeating: "a", count: VocabularyPrompt.maximumLength + 50)
         XCTAssertEqual(VocabularyPrompt.sanitize(long).count, VocabularyPrompt.maximumLength)
     }
+
+    func testVocabularyPromptHandlesEmptyLinesAndCControlCharacters() {
+        XCTAssertEqual(VocabularyPrompt.sanitize("\nAda\r\n\r\n, , Kubernetes\tSDK\u{0000}V2,\n"),
+                       "Ada, Kubernetes SDK V2")
+        XCTAssertEqual(VocabularyPrompt.sanitize(" \r\n,\t,\u{0000}"), "")
+        XCTAssertEqual(VocabularyPrompt.sanitize("Zoë, François, 東京, 👩🏽‍💻"), "Zoë, François, 東京, 👩🏽‍💻")
+    }
+
+    func testVocabularyPromptBoundsUTF8EvenForOneHugeGrapheme() {
+        let adversarial = "a" + String(repeating: "\u{0301}", count: 100_000)
+        let sanitized = VocabularyPrompt.sanitize(adversarial)
+        XCTAssertLessThanOrEqual(sanitized.utf8.count, VocabularyPrompt.maximumUTF8Bytes)
+        XCTAssertLessThanOrEqual(sanitized.count, VocabularyPrompt.maximumLength)
+        let emoji = VocabularyPrompt.sanitize(String(repeating: "👩🏽‍💻", count: 1_000))
+        XCTAssertLessThanOrEqual(emoji.utf8.count, VocabularyPrompt.maximumUTF8Bytes)
+        XCTAssertLessThanOrEqual(emoji.count, VocabularyPrompt.maximumLength)
+    }
+
+    func testSettingsDecodeBeforeVocabularyWithoutResettingExistingChoices() throws {
+        // The exact schema shipped before this feature, independent of the encoder
+        // under test. A synthesized decoder rejected it and reset every preference.
+        let legacy = Data(#"{"hotkey":"rightalt","pasteMode":"keystrokes","microphoneMode":"fixed","fixedDeviceID":"fixture-mic","screenMicrophones":{"fixture-screen":"fixture-mic"},"model":"mediumEnglish","minimumDuration":1,"maximumDuration":75,"restoreDelay":0.8}"#.utf8)
+        let settings = try JSONDecoder().decode(DictationSettings.self, from: legacy)
+        XCTAssertEqual(settings.hotkey, .rightalt)
+        XCTAssertEqual(settings.pasteMode, .keystrokes)
+        XCTAssertEqual(settings.microphoneMode, .fixed)
+        XCTAssertEqual(settings.fixedDeviceID, "fixture-mic")
+        XCTAssertEqual(settings.screenMicrophones, ["fixture-screen": "fixture-mic"])
+        XCTAssertEqual(settings.model, .mediumEnglish)
+        XCTAssertEqual(settings.minimumDuration, 1)
+        XCTAssertEqual(settings.maximumDuration, 75)
+        XCTAssertEqual(settings.restoreDelay, 0.8)
+        XCTAssertEqual(settings.vocabulary, "")
+    }
+
+    func testVocabularySettingsRoundTripAndMissingOptionalDefaults() throws {
+        var settings = DictationSettings()
+        settings.vocabulary = "Ada, Kubernetes"
+        let encoded = try JSONEncoder().encode(settings)
+        XCTAssertEqual(try JSONDecoder().decode(DictationSettings.self, from: encoded), settings)
+        XCTAssertEqual(try JSONDecoder().decode(DictationSettings.self, from: Data("{}".utf8)), DictationSettings())
+        XCTAssertThrowsError(try JSONDecoder().decode(DictationSettings.self, from: Data(#"{"vocabulary":42}"#.utf8)),
+                             "Malformed values must not be silently accepted as another type.")
+    }
 }

@@ -215,12 +215,14 @@ struct SettingsView: View {
                 }
                 GroupBox("Vocabulary") {
                     VStack(alignment: .leading, spacing: 8) {
-                        Text("Names, jargon, or product terms whisper.cpp should recognize. Separate entries with commas.")
+                        Text("Names, jargon, or product terms to help recognize your speech. Separate entries with commas or new lines.")
                             .font(.callout).foregroundStyle(.secondary)
                         TextEditor(text: $settings.value.vocabulary)
                             .font(.body).frame(height: 60)
                             .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.secondary.opacity(0.3)))
-                        Text("\(VocabularyPrompt.sanitize(settings.value.vocabulary).count)/\(VocabularyPrompt.maximumLength) characters used")
+                        Text("\(VocabularyPrompt.sanitize(settings.value.vocabulary).count)/\(VocabularyPrompt.maximumLength) characters considered")
+                            .font(.caption).foregroundStyle(.secondary)
+                        Text("Put important terms first. Only the first 128 model tokens are used; this can be fewer than 400 characters. Hints can affect accuracy and do not guarantee a spelling. Leave empty to disable.")
                             .font(.caption).foregroundStyle(.secondary)
                     }.padding(8)
                 }

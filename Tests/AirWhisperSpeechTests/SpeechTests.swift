@@ -3,6 +3,7 @@ import AVFoundation
 import CryptoKit
 import Foundation
 import XCTest
+import whisper
 @testable import AirWhisperSpeech
 
 final class SpeechTests: XCTestCase {
@@ -21,14 +22,21 @@ final class SpeechTests: XCTestCase {
         let samples = try XCTUnwrap(buffer.floatChannelData?[0])
         let audio = CapturedAudio(samples: Array(UnsafeBufferPointer(start: samples, count: Int(buffer.frameLength))))
         let transcriber = WhisperTranscriber()
+        try verifyVocabularyTokenBudget(modelURL: URL(fileURLWithPath: modelPath))
         try await transcriber.prepare(modelURL: URL(fileURLWithPath: modelPath))
         let text = try await transcriber.transcribe(audio, language: "en").lowercased()
         XCTAssertTrue(text.contains("fellow americans"), "The public speech fixture should match its known words.")
         XCTAssertTrue(text.contains("what you can do for your country"))
-        let silent = try await transcriber.transcribe(CapturedAudio(samples: [Float](repeating: 0, count: 16_000)), language: "en")
+        let hinted = try await transcriber.transcribe(audio, language: "en", initialPrompt: "Americans, country").lowercased()
+        XCTAssertTrue(hinted.contains("fellow americans"))
+        XCTAssertTrue(hinted.contains("what you can do for your country"))
+        let oversized = "Americans\u{0000}country\n" + String(repeating: "👩🏽‍💻", count: 1_000)
+        let bounded = try await transcriber.transcribe(audio, language: "en", initialPrompt: oversized).lowercased()
+        XCTAssertTrue(bounded.contains("fellow americans"), "Large, complex hints must remain valid C input.")
+        let silent = try await transcriber.transcribe(CapturedAudio(samples: [Float](repeating: 0, count: 16_000)), language: "en", initialPrompt: "Americans, country")
         XCTAssertTrue(silent.isEmpty)
         let longAudio = CapturedAudio(samples: Array(repeating: audio.samples, count: 5).flatMap { $0 })
-        let pending = Task { try await transcriber.transcribe(longAudio, language: "en") }
+        let pending = Task { try await transcriber.transcribe(longAudio, language: "en", initialPrompt: "Americans, country") }
         try await Task.sleep(nanoseconds: 100_000_000)
         transcriber.cancel()
         do {
@@ -45,6 +53,26 @@ final class SpeechTests: XCTestCase {
         let retainedSilence = try await transcriber.transcribe(CapturedAudio(samples: [Float](repeating: 0, count: 16_000)), language: "en")
         XCTAssertTrue(retainedSilence.isEmpty, "A canceled unload must preserve the current model context.")
         await transcriber.unload()
+    }
+
+    private func verifyVocabularyTokenBudget(modelURL: URL) throws {
+        let manifest = try ModelValidator.identify(modelURL)
+        try ModelValidator.validate(modelURL, manifest: manifest)
+        var parameters = whisper_context_default_params()
+        parameters.use_gpu = false
+        // Tokenization only: no decoder state, inference or microphone is needed.
+        let context = try XCTUnwrap(modelURL.path.withCString {
+            whisper_init_from_file_with_params_no_state($0, parameters)
+        })
+        defer { whisper_free(context) }
+        XCTAssertEqual(WhisperVocabulary.tokens(for: " , \n", context: context), [])
+        XCTAssertEqual(WhisperVocabulary.tokens(for: "Ada\u{0000}Lovelace\ncountry", context: context),
+                       WhisperVocabulary.tokens(for: "Ada Lovelace, country", context: context))
+        let prefix = WhisperVocabulary.tokens(for: "Americans,", context: context)
+        let long = WhisperVocabulary.tokens(for: "Americans, " + String(repeating: "👩🏽‍💻", count: 1_000), context: context)
+        XCTAssertFalse(prefix.isEmpty)
+        XCTAssertEqual(long.count, WhisperVocabulary.maximumTokens)
+        XCTAssertEqual(Array(long.prefix(prefix.count)), prefix, "Keep the first terms when applying the actual token budget.")
     }
 
     func testCanceledUnloadCannotInvalidateNewerSession() async throws {

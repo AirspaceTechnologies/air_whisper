@@ -88,18 +88,63 @@ public struct DictationSettings: Codable, Equatable, Sendable {
     public var vocabulary: String = ""
 
     public init() {}
+
+    private enum CodingKeys: String, CodingKey {
+        case hotkey, pasteMode, microphoneMode, fixedDeviceID, screenMicrophones, model
+        case minimumDuration, maximumDuration, restoreDelay, vocabulary
+    }
+
+    public init(from decoder: Decoder) throws {
+        // Older installations have no vocabulary key. Preserve their selected key,
+        // microphone, model and timings when new optional preferences are added.
+        self.init()
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        hotkey = try values.decodeIfPresent(PushToTalkKey.self, forKey: .hotkey) ?? hotkey
+        pasteMode = try values.decodeIfPresent(PasteMode.self, forKey: .pasteMode) ?? pasteMode
+        microphoneMode = try values.decodeIfPresent(MicrophoneMode.self, forKey: .microphoneMode) ?? microphoneMode
+        fixedDeviceID = try values.decodeIfPresent(String.self, forKey: .fixedDeviceID)
+        screenMicrophones = try values.decodeIfPresent([String: String].self, forKey: .screenMicrophones) ?? screenMicrophones
+        model = try values.decodeIfPresent(SpeechModel.self, forKey: .model) ?? model
+        minimumDuration = try values.decodeIfPresent(TimeInterval.self, forKey: .minimumDuration) ?? minimumDuration
+        maximumDuration = try values.decodeIfPresent(TimeInterval.self, forKey: .maximumDuration) ?? maximumDuration
+        restoreDelay = try values.decodeIfPresent(TimeInterval.self, forKey: .restoreDelay) ?? restoreDelay
+        vocabulary = try values.decodeIfPresent(String.self, forKey: .vocabulary) ?? ""
+    }
 }
 
 public enum VocabularyPrompt {
-    /// whisper.cpp's initial_prompt shares the model's limited context window with the
-    /// audio itself. Keep the glossary short so it cannot crowd out the actual speech.
+    /// A UI limit; the speech layer also enforces the decoder's token budget.
     public static let maximumLength = 400
+    public static let maximumUTF8Bytes = 1_600
 
     public static func sanitize(_ raw: String) -> String {
-        let flattened = raw
-            .components(separatedBy: .newlines)
+        // Bound work before counting grapheme clusters: a single apparent character
+        // can contain arbitrarily many combining marks. Never pass embedded NULs or
+        // other control characters into a C string.
+        var bounded = ""
+        var bytes = 0
+        for scalar in raw.unicodeScalars {
+            let piece: String
+            if CharacterSet.newlines.contains(scalar) {
+                piece = ","
+            } else if scalar.properties.generalCategory == .control {
+                piece = " "
+            } else {
+                piece = String(scalar)
+            }
+            guard bytes + piece.utf8.count <= maximumUTF8Bytes else { break }
+            bounded += piece
+            bytes += piece.utf8.count
+        }
+        let flattened = bounded.components(separatedBy: ",")
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
             .joined(separator: ", ")
-            .trimmingCharacters(in: .whitespaces)
-        return String(flattened.prefix(maximumLength))
+        var result = ""
+        for character in flattened.prefix(maximumLength) {
+            guard result.utf8.count + character.utf8.count <= maximumUTF8Bytes else { break }
+            result.append(character)
+        }
+        return result.trimmingCharacters(in: CharacterSet.whitespaces.union(CharacterSet(charactersIn: ",")))
     }
 }

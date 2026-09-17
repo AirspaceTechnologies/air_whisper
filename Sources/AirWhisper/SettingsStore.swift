@@ -27,6 +27,7 @@ final class SettingsStore: ObservableObject {
         value.minimumDuration = settings.minimumDuration.isFinite ? min(5, max(0.2, settings.minimumDuration)) : 0.5
         value.maximumDuration = settings.maximumDuration.isFinite ? min(120, max(5, settings.maximumDuration)) : 120
         value.restoreDelay = settings.restoreDelay.isFinite ? min(5, max(0.1, settings.restoreDelay)) : 0.3
+        value.vocabulary = VocabularyPrompt.sanitize(settings.vocabulary)
         return value
     }
 
@@ -47,7 +48,7 @@ final class SettingsStore: ObservableObject {
     }
 
     private func persist() {
-        guard let data = try? JSONEncoder().encode(value) else { return }
+        guard let data = try? JSONEncoder().encode(Self.validated(value)) else { return }
         defaults.set(data, forKey: Self.settingsKey)
     }
 }
