@@ -64,6 +64,27 @@ enum WhisperInput {
     }
 }
 
+enum WhisperVocabulary {
+    // Keep headroom for recognized speech in the 448-token English decoder. The
+    // framework otherwise silently keeps the end of an oversized initial prompt.
+    static let maximumTokens = 128
+
+    static func tokens(for raw: String, context: OpaquePointer) -> [whisper_token] {
+        let prompt = VocabularyPrompt.sanitize(raw)
+        guard !prompt.isEmpty else { return [] }
+        // Byte-pair tokenization cannot produce more tokens than UTF-8 bytes.
+        var tokens = [whisper_token](repeating: 0, count: prompt.utf8.count)
+        let count = prompt.withCString { text in
+            tokens.withUnsafeMutableBufferPointer {
+                whisper_tokenize(context, text, $0.baseAddress, Int32($0.count))
+            }
+        }
+        guard count > 0, count <= tokens.count else { return [] }
+        let limit = max(0, min(maximumTokens, Int(whisper_n_text_ctx(context)) / 2 - 1))
+        return Array(tokens.prefix(min(Int(count), limit)))
+    }
+}
+
 /// Every access to the C context occurs on this serial queue, including destruction.
 private final class WhisperWorker: @unchecked Sendable {
     let queue = DispatchQueue(label: "com.airwhisper.inference", qos: .userInitiated)
@@ -117,7 +138,7 @@ private final class WhisperWorker: @unchecked Sendable {
         self.modelURL = url
     }
 
-    func transcribe(_ audio: CapturedAudio, language: String, operation: InferenceOperation) throws -> String {
+    func transcribe(_ audio: CapturedAudio, language: String, initialPrompt: String, operation: InferenceOperation) throws -> String {
         try operation.check()
         try WhisperInput.validate(audio, language: language)
         guard let context else { throw SpeechError.modelNotLoaded }
@@ -144,10 +165,16 @@ private final class WhisperWorker: @unchecked Sendable {
         parameters.encoder_begin_callback = { _, _, raw in !whisperAbort(raw) }
         parameters.encoder_begin_callback_user_data = parameters.abort_callback_user_data
 
+        let promptTokens = WhisperVocabulary.tokens(for: initialPrompt, context: context)
+        try operation.check()
         let result: Int32 = "en".withCString { languagePointer in
             parameters.language = languagePointer
-            return audio.samples.withUnsafeBufferPointer { samples in
-                whisper_full(context, parameters, samples.baseAddress, Int32(samples.count))
+            return promptTokens.withUnsafeBufferPointer { prompt -> Int32 in
+                parameters.prompt_tokens = prompt.isEmpty ? nil : prompt.baseAddress
+                parameters.prompt_n_tokens = Int32(prompt.count)
+                return audio.samples.withUnsafeBufferPointer { samples in
+                    whisper_full(context, parameters, samples.baseAddress, Int32(samples.count))
+                }
             }
         }
         try operation.check()
@@ -184,11 +211,11 @@ public actor WhisperTranscriber {
         }
     }
 
-    public func transcribe(_ audio: CapturedAudio, language: String) async throws -> String {
+    public func transcribe(_ audio: CapturedAudio, language: String, initialPrompt: String = "") async throws -> String {
         try Task.checkCancellation()
         let operation = InferenceOperation(cancellation: cancellation, timeout: max(30, min(180, audio.duration * 3)))
         return try await perform(operation: operation) { worker in
-            try worker.transcribe(audio, language: language, operation: operation)
+            try worker.transcribe(audio, language: language, initialPrompt: initialPrompt, operation: operation)
         }
     }
 

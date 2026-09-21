@@ -49,6 +49,26 @@ final class AppIntegrationTests: XCTestCase {
     }
 
     @MainActor
+    func testVocabularyPersistsBoundedContentInIsolatedPreferences() throws {
+        let suite = "AirWhisperVocabularyTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let store = SettingsStore(defaults: defaults)
+        store.value.hotkey = .rightctrl
+        store.value.vocabulary = "Ada\u{0000}Lovelace\n" + String(repeating: "x", count: 2_000)
+        let saved = try XCTUnwrap(defaults.data(forKey: "dictationSettings.v1"))
+        let decoded = try JSONDecoder().decode(DictationSettings.self, from: saved)
+        XCTAssertEqual(decoded.vocabulary, VocabularyPrompt.sanitize(store.value.vocabulary))
+        XCTAssertLessThanOrEqual(decoded.vocabulary.count, VocabularyPrompt.maximumLength)
+        XCTAssertFalse(decoded.vocabulary.contains("\u{0000}"))
+        let relaunched = SettingsStore(defaults: defaults)
+        XCTAssertEqual(relaunched.value.hotkey, .rightctrl)
+        XCTAssertEqual(relaunched.value.vocabulary, decoded.vocabulary)
+        relaunched.value.vocabulary = ""
+        XCTAssertEqual(SettingsStore(defaults: defaults).value.vocabulary, "")
+    }
+
+    @MainActor
     func testNamedClipboardWriteKeepsOwnedGenerationAndNewOwnerChangesIt() throws {
         let pasteboard = NSPasteboard.withUniqueName()
         defer { pasteboard.releaseGlobally() }
