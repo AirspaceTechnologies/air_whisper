@@ -1,5 +1,17 @@
 # Swift build validation
 
+## Microphone setup tests — unreleased 0.1.5 (build 6), 2026-09-22
+
+Validated on Apple Silicon, macOS 26.5.1, Swift 6.3.3. This is a separate feature branch; the published release remains 0.1.4 (5).
+
+- `make all` passed with the existing verified Small English model and pinned public JFK fixture configured: **91 Swift tests passed, zero failures or skips**, plus all seven dependency-cache regression checks. The two real-model tests cover inference cancellation/recovery and the new Settings test controller recognizing the public recording through the real Whisper engine. No live microphone is used by these checks.
+- Added synthetic audio and fake-driver coverage for level measurements, throttling, meter-only capture without retained PCM, duration limits, device rates, pending authorization, and stale callbacks. Controller tests cover explicit row routing, unsaved candidates, disconnects, capture-before-inference ordering, cancellation ownership, startup/stop deadlines, deferred model preparation, playback cancellation, and five-minute expiry. A generated WAV is decoded to verify the playback encoding without playing sound.
+- Native SwiftUI panels were rendered and visually inspected in idle, metering, and result states using synthetic data. The minimum-width check used a 592-point panel within a 660-point window layout; controls and transcript fit without clipping. The temporary rendering harness was removed afterward. VoiceOver and the complete Settings-window interaction flow remain manual checks.
+- Release packaging and the extracted ZIP passed bundle self-check, ad hoc signature, portable dependency, and version verification. The extracted executable reports `Air Whisper 0.1.5 (6)`; `SHA256SUMS` matches the ZIP. No model, audio fixture, or AppleDouble files are packaged.
+- Independent source review covered shared recorder/model ownership and lifecycle cleanup. Repository architecture indexing was unavailable, so this review used the checked-out source and local tests.
+
+The app was **not installed or published**. Live microphone identification, physical display assignments, playback through speakers/AirPods, permission revocation, window/app switching, sleep/lock, and a real hotkey/insertion session still require the checks in [test-checklist.md](../test-checklist.md). Automated checks did not capture private audio, play sound, or use the normal clipboard.
+
 ## Public release 0.1.4 (build 5) — 2026-09-17
 
 Validated on an Apple Silicon Mac running macOS 26.5.1 with Swift 6.3.3. This release uses the merged native app and public-release preparation changes; the open custom-vocabulary and cleanup features are not included.

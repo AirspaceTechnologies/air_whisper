@@ -37,6 +37,8 @@ Updates are installed manually; the app has no automatic updater.
 
 Starting with 0.1.4, the microphone menu and Settings header show the running app's version and build, for example **Air Whisper 0.1.4 (5)**. Use these to confirm which copy you opened after an update. For the older 0.1.2 release, select the installed app in Finder and use **Get Info** to check its version.
 
+Builds from the current source show **0.1.5 (6)** and include the microphone tests below. This version is **unreleased**; the downloadable app remains **0.1.4 (5)**.
+
 1. Download the newer **Air-Whisper.zip** from [Releases](https://github.com/AirspaceTechnologies/air_whisper/releases). Keep the previous ZIP if you want an easy rollback.
 2. Choose **microphone menu → Quit Air Whisper**. Closing the Settings window leaves dictation running.
 3. Extract the new ZIP and replace the existing **Air Whisper.app** in the same Applications folder. Keep one installed copy and reopen it from there.
@@ -68,6 +70,19 @@ If Fn does nothing after an update, check Air Whisper's own Settings status. Mis
 - Automatic fallback prefers built-in audio over a Bluetooth headset mic. Explicit selections are honored.
 - Launch at login is a user-controlled setting.
 - Open settings, reset dictation, or quit from the microphone icon in the menu bar. Closing Settings does not quit the app.
+
+### Identify and test a microphone
+
+**Available in unreleased 0.1.5 (6) source builds. These controls are not in the 0.1.4 download.**
+
+1. Open **Settings → Microphones**. Each fixed, fallback, or display selection shows the actual microphone it resolves to. Use **Identify Displays** to match the display numbers to your screens, then choose **Test** beside the row you want to check.
+2. Choose a **Microphone to test**. **Start Level Meter** opens that one input; speak near a physical microphone and watch the gauge. Same-named devices keep distinct labels across reconnects, but those labels do not indicate left or right. Stop the meter when finished; it stops automatically after 30 seconds and keeps no recording.
+3. Select **Use for This Display**, **Use as Fallback**, or **Use This Microphone** to save a tested choice. Changing the test picker alone does not change your saved assignments. **Automatic for this selection** previews the automatic fallback for that row.
+4. With a transcription model ready, choose **Record Test**, wait for recording to start, and speak a short phrase. Select **Stop and Transcribe**, or let the 10-second limit finish it. The result appears in Settings. **Play Recording** plays the sample after capture has stopped; **Try Again** starts a fresh test and **Clear** discards the result.
+
+The level meter requires Microphone access but no model, Accessibility access, or global hotkey permission. The transcription test also requires a loaded model. A moving gauge confirms incoming sound, playback helps you hear the selected input, and the displayed words check transcription. To check your hotkey and insertion into Chrome, Slack, or another app, perform a normal dictation there afterward.
+
+Tests open a microphone only when you press **Start Level Meter** or **Record Test**. Testing stops when you leave the Microphones tab, switch to another app, minimize or close Settings, sleep/lock the Mac, or quit. These actions also clear temporary recordings and results. Results otherwise stay in memory for five idle minutes before clearing; test transcription does not paste into another app or change the clipboard. Explicitly testing a Bluetooth headset microphone can affect headphone playback quality while it is active.
 
 ## Build without a developer account
 
@@ -114,18 +129,18 @@ git pull --ff-only
 make all
 ```
 
-`APP_VERSION` sets the displayed app version and `APP_BUILD` sets its build number. Defaults come from `Resources/Info.plist` (currently `0.1.4` and `5`); increase them for each distributed update and match the release tag to the version. The overrides change the packaged app, not the checked-in bundle metadata.
+`APP_VERSION` sets the displayed app version and `APP_BUILD` sets its build number. Defaults come from `Resources/Info.plist` (currently the unreleased `0.1.5` and `6`); increase them for each distributed update and match the release tag to the version. The overrides change the packaged app, not the checked-in bundle metadata.
 
 Test the resulting app using the [manual checklist](test-checklist.md), including replacement of an existing installation. Keep the reviewed commit SHA with your release notes. Attach **both** `dist/Air-Whisper.zip` and `dist/SHA256SUMS` to a draft GitHub Release for review. An approved shared folder is also suitable for internal review builds.
 
 The following is an example for a maintainer with the GitHub CLI installed and authenticated. Run it only after review and merge, from the checkout used for the build. Write release notes first, including changes, required macOS/architecture, and any update caveats:
 
 ```sh
-# Example only: match version/build to the tested app and use its full commit SHA.
-gh release create v0.1.4 dist/Air-Whisper.zip dist/SHA256SUMS \
+# Example for a future release: match the tested app and its full commit SHA.
+gh release create v0.1.5 dist/Air-Whisper.zip dist/SHA256SUMS \
   --draft \
   --target "<reviewed-commit-SHA>" \
-  --title "Air Whisper 0.1.4" \
+  --title "Air Whisper 0.1.5" \
   --notes-file /path/to/release-notes.md
 ```
 
@@ -133,8 +148,9 @@ This creates a draft for review. Check its version, commit, notes, and attached 
 
 ## Privacy and storage
 
-- Capture starts only after a key press, with no always-listening buffer.
+- Capture starts only when you hold the push-to-talk key or explicitly start a microphone test (source builds 0.1.5 and later), with no always-listening buffer. Opening Settings does not start listening.
 - Audio stays in process memory. The app does not create recording files or upload audio. This does not prevent operating-system swap or diagnostic dumps.
+- Input metering discards incoming samples after measuring their level. A recorded test keeps one temporary sample and result for playback/transcription; leaving the test or clearing it discards them. Test results are displayed within Settings and are not automatically copied or inserted elsewhere.
 - Embedded inference requires no HTTP server, listening port, or network connection.
 - Explicit model downloads contact Hugging Face and its download hosting. Exact file size and SHA-256 are verified before atomic installation; dictation then works offline.
 - Clipboard insertion temporarily places the transcript on the system clipboard. Clipboard managers, Universal Clipboard, and destination apps may retain or sync it; restoring the previous clipboard cannot recall copies they have taken. **Preferences → Insert using → Simulated typing** avoids the clipboard for automatic insertion. Explicit **Copy Dictation** writes the transcript to the clipboard and leaves it there for you to paste.

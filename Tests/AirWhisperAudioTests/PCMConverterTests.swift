@@ -33,6 +33,32 @@ final class PCMConverterTests: XCTestCase {
         XCTAssertLessThan(greatestDifference, 0.0001)
     }
 
+    func testHeadsetSampleRatesProduceFiniteTranscriptionPCM() throws {
+        for rate in [8_000.0, 16_000, 24_000] {
+            let converter = PCMConverter()
+            let output = try converter.convert(makeSine(rate: rate, channels: 1, start: 0, frames: Int(rate))) + converter.finish()
+            XCTAssertEqual(output.count, 16_000, accuracy: 2)
+            XCTAssertTrue(output.allSatisfy { $0.isFinite && abs($0) <= 1 })
+            var meter = try CaptureSampleProcessor(mode: .meterOnly, maximumDuration: 2)
+            let level = try XCTUnwrap(meter.append(output, now: 0))
+            XCTAssertTrue(level.hasSignal)
+            XCTAssertFalse(level.isClipping)
+            XCTAssertTrue(meter.samples.isEmpty)
+        }
+    }
+
+    func testSourceFormatChangeKeepsFiniteBoundedAudioAndMetering() throws {
+        let converter = PCMConverter()
+        var output = try converter.convert(makeSine(rate: 24_000, channels: 1, start: 0, frames: 2_400))
+        output += try converter.convert(makeSine(rate: 48_000, channels: 2, start: 0, frames: 4_800))
+        output += try converter.finish()
+        XCTAssertEqual(output.count, 3_200, accuracy: 4)
+        XCTAssertTrue(output.allSatisfy { $0.isFinite && abs($0) <= 1 })
+        var meter = try CaptureSampleProcessor(mode: .meterOnly, maximumDuration: 1)
+        XCTAssertTrue(try XCTUnwrap(meter.append(output, now: 0)).hasSignal)
+        XCTAssertTrue(meter.samples.isEmpty)
+    }
+
     func testStereoDownmixIncludesBothChannels() throws {
         let format = AVAudioFormat(standardFormatWithSampleRate: 48_000, channels: 2)!
         let input = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 4_800)!

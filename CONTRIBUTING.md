@@ -12,7 +12,7 @@ make all
 
 This verifies the pinned framework download, runs offline bootstrap regressions and Swift tests, and builds and verifies the app ZIP. The first build needs internet access for the dependency archive. Generated files in `.build/`, `Vendor/`, and `dist/` are ignored; do not add them to commits. CI runs the automated checks on pull requests.
 
-For subsequent development, `make test` runs the test suite and `make app` packages the app. The optional real-model test is skipped unless `AIR_WHISPER_TEST_MODEL` and `AIR_WHISPER_TEST_WAV` name the verified model and public speech fixture described in [ThirdParty/NOTICES.md](ThirdParty/NOTICES.md). Report skipped checks explicitly. Do not use a private recording as a committed test fixture.
+For subsequent development, `make test` runs the test suite and `make app` packages the app. The two optional real-model tests are skipped unless `AIR_WHISPER_TEST_MODEL` and `AIR_WHISPER_TEST_WAV` name the verified model and public speech fixture described in [ThirdParty/NOTICES.md](ThirdParty/NOTICES.md). They cover inference cancellation/recovery and the Settings transcription-test flow. Report skipped checks explicitly. Do not use a private recording as a committed test fixture.
 
 Use the packaged app for manual testing of permissions, recording, hotkeys, and text insertion. Building does not replace an installed app. Ad hoc signed builds can require renewed macOS permissions when installed; see the [update instructions](README.md#accessibility-still-asks-for-access-after-an-update). The [manual checklist](test-checklist.md) covers checks that automated tests cannot perform. Do not report unperformed hardware checks as passed.
 

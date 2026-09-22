@@ -45,6 +45,12 @@ final class AppController: ObservableObject {
 
     private let recorder = AudioRecorder()
     private let transcriber = WhisperTranscriber()
+    lazy var microphoneTest: MicrophoneTestController = {
+        let test = MicrophoneTestController(recorder: recorder, transcriber: transcriber,
+                                            playback: MicrophoneTestPlayback())
+        test.onIdle = { [weak self] in self?.resumePendingModelPreparation() }
+        return test
+    }()
     private let keyboard = KeyboardMonitor()
     private let insertion = TextInsertion()
     private let accessibilityPreparation = AccessibilityPreparation()
@@ -54,6 +60,7 @@ final class AppController: ObservableObject {
     private var sessionID: UUID?
     private var cancellationID: UUID?
     private var modelOperationID: UUID?
+    private var modelPreparationPending = false
     private var startedAt: Date?
     private var activeScreen: NSScreen?
     private var insertionTarget: InsertionTarget?
@@ -73,10 +80,11 @@ final class AppController: ObservableObject {
     private var suspensionReasons = Set<SuspensionReason>()
     private var suspended: Bool { !suspensionReasons.isEmpty }
 
-    var isBusy: Bool { phase != .idle }
+    var isBusy: Bool { phase != .idle || microphoneTest.isBusy }
     var setupComplete: Bool { microphoneAuthorized && accessibilityAuthorized && hotkeyActive && modelReady }
     var statusText: String {
-        if isBusy { return phase.title }
+        if microphoneTest.isBusy { return microphoneTest.phase.title }
+        if phase != .idle { return phase.title }
         if !accessibilityAuthorized { return "Accessibility access required — open Air Whisper Settings." }
         if !microphoneAuthorized { return "Microphone access required — open Air Whisper Settings." }
         if suspended { return "Dictation is paused while this Mac is inactive." }
@@ -102,12 +110,23 @@ final class AppController: ObservableObject {
         refreshLoginStatus()
         settings.$value.dropFirst().removeDuplicates().sink { [weak self] next in
             guard let self else { return }
+            if self.settings.value.microphoneMode != next.microphoneMode ||
+               self.settings.value.fixedDeviceID != next.fixedDeviceID ||
+               self.settings.value.screenMicrophones != next.screenMicrophones {
+                self.microphoneTest.clear()
+            }
             if self.keyboard.key != next.hotkey {
                 self.cancelSession()
                 self.keyboard.key = next.hotkey
                 self.updateKeyboardMonitor(restart: true)
             }
             self.onStatusChange?()
+        }.store(in: &observation)
+        microphoneTest.objectWillChange.sink { [weak self] in
+            self?.objectWillChange.send()
+        }.store(in: &observation)
+        devices.$devices.dropFirst().removeDuplicates().sink { [weak self] next in
+            self?.microphoneTest.availableDevicesChanged(next)
         }.store(in: &observation)
         objectWillChange.sink { [weak self] in
             DispatchQueue.main.async { self?.onStatusChange?() }
@@ -135,13 +154,17 @@ final class AppController: ObservableObject {
     }
 
     func refreshPermissions() {
+        let hadMicrophoneAccess = microphoneAuthorized
         microphoneAuthorized = AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
         let hadAccessibilityAccess = accessibilityAuthorized
         accessibilityAuthorized = AXIsProcessTrusted()
         monitoringAuthorized = CGPreflightListenEventAccess()
         if accessibilityAuthorized && !hadAccessibilityAccess { prepareFocusedApplication() }
+        if !microphoneAuthorized && (hadMicrophoneAccess || microphoneTest.isBusy || microphoneTest.hasRecording) {
+            microphoneTest.cancel(message: "Microphone access was removed. Restore it in Setup before testing again.")
+        }
         if !microphoneAuthorized || !accessibilityAuthorized {
-            if isBusy { cancelSession(message: "A required permission was removed. Open Settings to restore access.") }
+            if phase != .idle { cancelSession(message: "A required permission was removed. Open Settings to restore access.") }
         }
         updateKeyboardMonitor()
     }
@@ -219,7 +242,9 @@ final class AppController: ObservableObject {
     }
 
     func prepareModel() {
-        guard !isBusy else { return }
+        guard !quitting else { return }
+        guard !isBusy else { modelPreparationPending = true; return }
+        modelPreparationPending = false
         modelTask?.cancel()
         transcriber.cancel()
         modelReady = false
@@ -245,6 +270,11 @@ final class AppController: ObservableObject {
                 self.message = "Model could not be loaded: \(error.localizedDescription)"
             }
         }
+    }
+
+    private func resumePendingModelPreparation() {
+        guard modelPreparationPending, !isBusy, !downloadingModel, !quitting else { return }
+        prepareModel()
     }
 
     func downloadModel() {
@@ -307,6 +337,50 @@ final class AppController: ObservableObject {
         refreshLoginStatus()
     }
 
+    /// Saved and draft routing use row identity, never the focused Settings display.
+    func resolvedMicrophone(for row: MicrophoneTestRow) -> MicrophoneTestResolution? {
+        MicrophoneTestRouting.saved(row: row, devices: devices.devices, settings: settings.value)
+    }
+
+    func resolvedMicrophone(for row: MicrophoneTestRow, candidateID: String?) -> MicrophoneTestResolution? {
+        MicrophoneTestRouting.candidate(row: row, candidateID: candidateID,
+                                        devices: devices.devices, settings: settings.value)
+    }
+
+    func startMicrophoneTest(row: MicrophoneTestRow, candidateID: String?, record: Bool) {
+        guard !isBusy, !quitting, !suspended else { return }
+        if case .display(let id) = row, !displays.contains(where: { $0.id == id }) {
+            microphoneTest.showUnavailable("That display disconnected. Choose a connected display before testing.")
+            return
+        }
+        guard let resolution = resolvedMicrophone(for: row, candidateID: candidateID) else {
+            microphoneTest.showUnavailable("The selected microphone is unavailable. Choose a connected microphone before testing.")
+            return
+        }
+        refreshPermissions()
+        microphoneTest.start(row: row, resolution: resolution, record: record,
+                             microphoneAuthorized: microphoneAuthorized, modelReady: modelReady)
+    }
+
+    func applyMicrophoneCandidate(_ candidateID: String?, to row: MicrophoneTestRow) {
+        guard !isBusy else { return }
+        if let candidateID, !devices.devices.contains(where: { $0.id == candidateID }) {
+            microphoneTest.showUnavailable("The selected microphone is unavailable; its assignment was not saved.")
+            return
+        }
+        if case .display(let id) = row, !displays.contains(where: { $0.id == id }) {
+            microphoneTest.showUnavailable("That display disconnected; its assignment was not saved.")
+            return
+        }
+        microphoneTest.clear()
+        switch row {
+        case .display(let id): settings.value.screenMicrophones[id] = candidateID
+        case .fallback, .fixed: settings.value.fixedDeviceID = candidateID
+        }
+    }
+
+    func microphoneTestContextChanged() { microphoneTest.clear() }
+
     func identifyDisplays() {
         displayOverlayTask?.cancel()
         displayOverlays.forEach { $0.hide() }
@@ -334,6 +408,7 @@ final class AppController: ObservableObject {
             showNotice("No microphone is available. Connect one and try again.", symbol: "mic.slash")
             return
         }
+        microphoneTest.clear()
         pendingExpiryTask?.cancel()
         pendingTranscript = nil
         overlayTask?.cancel()
@@ -435,6 +510,7 @@ final class AppController: ObservableObject {
         processingTask = nil
         phase = .idle
         overlay.hide()
+        resumePendingModelPreparation()
     }
 
     func cancelSession(message: String? = nil) {
@@ -459,11 +535,13 @@ final class AppController: ObservableObject {
             self.phase = .idle
             self.startTask = nil
             self.processingTask = nil
+            self.resumePendingModelPreparation()
             if let message { self.showNotice(message, symbol: "exclamationmark.triangle") }
         }
     }
 
     func reset() {
+        microphoneTest.clear()
         cancelSession()
         keyboard.resetHeldState()
         message = nil
@@ -534,11 +612,19 @@ final class AppController: ObservableObject {
         notificationTokens.append(NotificationCenter.default.addObserver(
             forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main
         ) { [weak self] _ in
-            MainActor.assumeIsolated { self?.displays = DisplayContext.displays }
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.displays = DisplayContext.displays
+                if case .display(let id) = self.microphoneTest.row,
+                   !self.displays.contains(where: { $0.id == id }) {
+                    self.microphoneTest.cancel(message: "The display being tested disconnected. Choose a connected display.")
+                }
+            }
         })
     }
 
     private func suspend(reason: SuspensionReason) {
+        microphoneTest.clear()
         suspensionReasons.insert(reason)
         cancelSession()
         keyboard.stop()
@@ -576,6 +662,7 @@ final class AppController: ObservableObject {
         overlay.hide()
         pendingTranscript = nil
         insertion.restoreClipboardNow()
+        await microphoneTest.shutdown()
         await recorder.cancel()
         await transcriber.unload()
     }
