@@ -53,6 +53,27 @@ Run `make all` for automated checks. Checked items record user-confirmed results
 - [ ] Sleep/lock during capture stops it; unlock supports a new take.
 - [ ] Quit during capture releases the microphone.
 
+## Microphone setup tests (0.1.5 source builds)
+
+- [ ] Opening Settings, switching to Microphones, choosing a Test row, and changing its candidate leave the microphone closed until Start Level Meter or Record Test is pressed.
+- [ ] With Microphone permission granted but Accessibility/Input Monitoring denied and no model installed, metering still works; recording/transcription explains that a model is needed.
+- [ ] Deny and regrant Microphone access; the test shows an actionable state and never begins capturing solely because a permission prompt was later accepted.
+- [ ] Check fixed, fallback, and each display row: the displayed actual device and fallback reason match DeviceSelection, including a missing saved device and implicit Bluetooth avoidance.
+- [ ] Use Identify Displays and test each of two same-named Studio Display microphones by speaking near it. Candidate testing alone does not alter assignments; Use for This Display saves only the intended stable ID.
+- [ ] Test a display other than the one holding Settings. Moving focus or the pointer does not silently change the selected test row or input.
+- [ ] Change the candidate between tests; the prior sample/result clears. Reconnect/reorder same-named microphones and confirm their stable labels and assignments remain correct.
+- [ ] Disconnect the exact candidate before or during capture. The test reports the unavailable device and stops instead of silently recording a replacement microphone.
+- [ ] Check the gauge with speech, quiet input, and a loud sound: accessible text distinguishes no signal/receiving sound/high input. The meter stops at 30 seconds and holds no playable recording.
+- [ ] Record a short phrase, stop early and at the 10-second cap, and confirm microphone release precedes transcription. Recognized text appears only in Settings; the clipboard and other apps remain unchanged.
+- [ ] Play Recording only after capture ends; Stop Playback releases playback. Try Again replaces the sample; Clear removes both audio and text. Silence/too-short audio produces a clear outcome.
+- [ ] Stop or cancel during startup, recording, transcription, and playback. Stop/Cancel remain usable while routing controls are disabled; stale work never restores an old result.
+- [ ] Normal push-to-talk and setup tests cannot capture at the same time. A model change/download/reset cannot leave test audio or inference running against stale state.
+- [ ] With AirPods as output, check an explicitly chosen AirPods input and a built-in input separately. Stopping/leaving the test releases the input; do not diagnose playback quality from the meter alone.
+- [ ] Leave the Microphones tab, switch to another app, minimize/close Settings, lock/sleep, or quit during each active test stage; input/playback stop and temporary audio/text clear. Reopening Settings stays idle.
+- [ ] Leave a completed sample idle for five minutes and confirm audio/text clear. Playback restarts the idle expiry interval after it finishes.
+- [ ] Check controls, meter status, and transcript with VoiceOver and at the 660-point minimum/690-point default Settings width; labels remain readable and Stop/Cancel stay reachable.
+- [ ] After the internal test succeeds, perform a normal hotkey dictation into another app to separately verify routing, permission, focus, and insertion behavior.
+
 ## Privacy
 
 - [ ] No application-created audio files during or after dictation.

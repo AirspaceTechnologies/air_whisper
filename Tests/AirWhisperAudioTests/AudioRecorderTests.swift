@@ -12,7 +12,7 @@ final class AudioRecorderTests: XCTestCase {
             permissionRequests += 1
             return true
         })
-        let start = Task { try await recorder.start(deviceID: "test", maximumDuration: 120) }
+        let start = Task { try await recorder.start(deviceID: "test", maximumDuration: 120, mode: .meterOnly) }
         start.cancel()
         await assertCancelled(start)
         XCTAssertEqual(permissionRequests, 0)
@@ -45,6 +45,19 @@ final class AudioRecorderTests: XCTestCase {
         await assertCancelled(start)
         let starts = driver.startCount
         XCTAssertEqual(starts, 0)
+    }
+
+    func testMeterCanceledDuringPermissionPromptCannotStartAfterApproval() async throws {
+        let requested = expectation(description: "meter permission requested")
+        let permission = DeferredPermission(requested: requested)
+        let driver = FakeCaptureDriver()
+        let recorder = AudioRecorder(driver: driver, authorize: { await permission.request() })
+        let start = Task { try await recorder.start(deviceID: "fixture", maximumDuration: 30, mode: .meterOnly) }
+        await fulfillment(of: [requested], timeout: 2)
+        await recorder.cancel()
+        await permission.resolve(true)
+        await assertCancelled(start)
+        XCTAssertEqual(driver.startCount, 0)
     }
 
     func testCancelDuringDriverStartupReleasesThatSession() async throws {
@@ -137,9 +150,11 @@ final class AudioRecorderTests: XCTestCase {
         recorder.onFirstSamples = { stale.fulfill() }
         recorder.onFailure = { _ in stale.fulfill() }
         recorder.onLimitReached = { stale.fulfill() }
+        recorder.onLevel = { _ in stale.fulfill() }
         driver.emit(.firstSamples, id: oldID)
         driver.emit(.failure(.interrupted), id: oldID)
         driver.emit(.limitReached, id: oldID)
+        driver.emit(.level(AudioLevel(rms: 0.25, peak: 0.5)), id: oldID)
         await fulfillment(of: [stale], timeout: 0.1)
 
         let current = expectation(description: "current first frames")
@@ -148,6 +163,63 @@ final class AudioRecorderTests: XCTestCase {
         let newID = try XCTUnwrap(secondID)
         driver.emit(.firstSamples, id: newID)
         await fulfillment(of: [current], timeout: 2)
+        await recorder.cancel()
+    }
+
+    func testCaptureModeDefaultsToRecordingAndMeterStopReturnsNoAudio() async throws {
+        let driver = FakeCaptureDriver()
+        let recorder = AudioRecorder(driver: driver, authorize: { true })
+        try await recorder.start(deviceID: "fixture", maximumDuration: 10)
+        XCTAssertEqual(driver.mode, .recording)
+        let recording = try await recorder.stop()
+        XCTAssertEqual(recording.samples, [0.25])
+        try await recorder.start(deviceID: "fixture", maximumDuration: 10, mode: .meterOnly)
+        XCTAssertEqual(driver.mode, .meterOnly)
+        let preview = try await recorder.stop()
+        XCTAssertTrue(preview.samples.isEmpty)
+    }
+
+    func testMeterLevelsAndLimitCallbacksUseCurrentSessionOnly() async throws {
+        let driver = FakeCaptureDriver()
+        let recorder = AudioRecorder(driver: driver, authorize: { true })
+        let received = expectation(description: "current meter level")
+        let limit = expectation(description: "meter duration limit")
+        let expected = AudioLevel(rms: 0.25, peak: 0.5)
+        recorder.onLevel = { level in XCTAssertEqual(level, expected); received.fulfill() }
+        recorder.onLimitReached = { limit.fulfill() }
+        try await recorder.start(deviceID: "fixture", maximumDuration: 10, mode: .meterOnly)
+        let id = try XCTUnwrap(driver.activeID)
+        driver.emit(.level(expected), id: id)
+        driver.emit(.limitReached, id: id)
+        await fulfillment(of: [received, limit], timeout: 2)
+        await recorder.cancel()
+        let stale = expectation(description: "no events after cancellation")
+        stale.isInverted = true
+        recorder.onLevel = { _ in stale.fulfill() }
+        recorder.onLimitReached = { stale.fulfill() }
+        driver.emit(.level(expected), id: id)
+        driver.emit(.limitReached, id: id)
+        await fulfillment(of: [stale], timeout: 0.1)
+    }
+
+    func testSwitchingFromMeterToRecordingWaitsForMicrophoneRelease() async throws {
+        let stopping = expectation(description: "meter stopping")
+        let driver = FakeCaptureDriver(stopping: stopping, suspendStop: true)
+        let recorder = AudioRecorder(driver: driver, authorize: { true })
+        try await recorder.start(deviceID: "first", maximumDuration: 10, mode: .meterOnly)
+        let stop = Task { try await recorder.stop() }
+        await fulfillment(of: [stopping], timeout: 2)
+        do {
+            try await recorder.start(deviceID: "second", maximumDuration: 10)
+            XCTFail("Another mode started before the meter released the microphone")
+        } catch {
+            guard case AudioRecordingError.alreadyRecording = error else { return XCTFail("Unexpected error: \(error)") }
+        }
+        driver.resumeStop()
+        let preview = try await stop.value
+        XCTAssertTrue(preview.samples.isEmpty)
+        try await recorder.start(deviceID: "second", maximumDuration: 10)
+        XCTAssertEqual(driver.mode, .recording)
         await recorder.cancel()
     }
 
@@ -183,6 +255,7 @@ private actor DeferredPermission {
 private final class FakeCaptureDriver: AudioCaptureDriving {
     private(set) var activeID: UUID?
     private(set) var startCount = 0
+    private(set) var mode: AudioCaptureMode = .recording
     private let starting: XCTestExpectation?
     private let suspendStart: Bool
     private let stopping: XCTestExpectation?
@@ -199,8 +272,9 @@ private final class FakeCaptureDriver: AudioCaptureDriving {
         self.suspendStop = suspendStop
     }
 
-    func start(id: UUID, deviceID: String, maximumDuration: TimeInterval, event: @escaping (UUID, CaptureEvent) -> Void) async throws {
+    func start(id: UUID, deviceID: String, maximumDuration: TimeInterval, mode: AudioCaptureMode, event: @escaping (UUID, CaptureEvent) -> Void) async throws {
         activeID = id
+        self.mode = mode
         startCount += 1
         handlers[id] = event
         if suspendStart {
@@ -220,7 +294,7 @@ private final class FakeCaptureDriver: AudioCaptureDriving {
             }
         }
         if activeID == id { activeID = nil }
-        return CapturedAudio(samples: [0.25])
+        return CapturedAudio(samples: mode == .recording ? [0.25] : [])
     }
 
     func cancel(id: UUID) async {

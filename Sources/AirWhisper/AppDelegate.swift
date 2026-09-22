@@ -2,7 +2,7 @@ import AppKit
 import SwiftUI
 
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWindowDelegate {
     private var controller: AppController!
     private var statusItem: NSStatusItem!
     private var settingsWindow: NSWindow?
@@ -56,7 +56,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         status.isEnabled = false
         menu.addItem(status)
         menu.addItem(.separator())
-        if controller.isBusy { add("Cancel Dictation", action: #selector(cancelDictation), to: menu) }
+        if controller.microphoneTest.isBusy { add("Cancel Microphone Test", action: #selector(cancelMicrophoneTest), to: menu) }
+        else if controller.isBusy { add("Cancel Dictation", action: #selector(cancelDictation), to: menu) }
         if controller.pendingTranscript != nil { add("Copy Dictation", action: #selector(copyDictation), to: menu) }
         add("Settings…", action: #selector(showSettings), key: ",", to: menu)
         add("Reset Dictation", action: #selector(resetDictation), to: menu)
@@ -72,13 +73,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func updateStatus() {
         let symbol: String
-        switch controller.phase {
+        if controller.microphoneTest.isBusy {
+            symbol = [.starting, .recording, .metering].contains(controller.microphoneTest.phase) ? "mic.fill" : "ellipsis.bubble"
+        } else { switch controller.phase {
         case .listening: symbol = "mic.fill"
         case .starting, .stopping: symbol = "mic.badge.ellipsis"
         case .transcribing: symbol = "ellipsis.bubble"
         case .cancelling: symbol = "xmark.circle"
         case .idle: symbol = controller.setupComplete ? "mic" : "mic.badge.xmark"
-        }
+        } }
         statusItem.button?.image = NSImage(systemSymbolName: symbol, accessibilityDescription: controller.statusText)
         statusItem.button?.toolTip = "\(AppVersion.appTitle) — \(controller.statusText)"
     }
@@ -93,6 +96,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             window.title = "Air Whisper Settings"
             window.contentView = NSHostingView(rootView: content)
             window.isReleasedWhenClosed = false
+            window.delegate = self
             window.minSize = NSSize(width: 660, height: 640)
             window.center()
             settingsWindow = window
@@ -102,6 +106,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         settingsWindow?.makeKeyAndOrderFront(nil)
     }
 
+    func windowWillClose(_ notification: Notification) { controller.microphoneTestContextChanged() }
+    func windowDidMiniaturize(_ notification: Notification) { controller.microphoneTestContextChanged() }
+    func windowDidResignKey(_ notification: Notification) { controller.microphoneTestContextChanged() }
+    func applicationDidResignActive(_ notification: Notification) { controller?.microphoneTestContextChanged() }
+
+    @objc private func cancelMicrophoneTest() { controller.microphoneTest.cancel() }
     @objc private func cancelDictation() { controller.cancelSession() }
     @objc private func resetDictation() { controller.reset() }
     @objc private func copyDictation() { controller.copyPendingTranscript() }

@@ -10,12 +10,12 @@
     <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
     <key>CFBundleName</key><string>Air Whisper</string>
     <key>CFBundlePackageType</key><string>APPL</string>
-    <key>CFBundleShortVersionString</key><string>0.1.4</string>
-    <key>CFBundleVersion</key><string>5</string>
+    <key>CFBundleShortVersionString</key><string>0.1.5</string>
+    <key>CFBundleVersion</key><string>6</string>
     <key>LSMinimumSystemVersion</key><string>13.3</string>
     <key>LSUIElement</key><true/>
     <key>NSHighResolutionCapable</key><true/>
-    <key>NSMicrophoneUsageDescription</key><string>Air Whisper records only while you hold your push-to-talk key, then transcribes on your Mac.</string>
+    <key>NSMicrophoneUsageDescription</key><string>Air Whisper listens while you hold push-to-talk or explicitly test a microphone in Settings. Transcription happens on your Mac.</string>
     <key>NSPrincipalClass</key><string>NSApplication</string>
 </dict>
 </plist>

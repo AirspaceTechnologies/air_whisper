@@ -8,6 +8,20 @@ struct SettingsView: View {
     @ObservedObject var settings: SettingsStore
     @ObservedObject var devices: AudioDeviceManager
     @ObservedObject var models: ModelManager
+    @ObservedObject private var microphoneTest: MicrophoneTestController
+    @State private var selectedTab = SettingsTab.setup
+    @State private var testRow: MicrophoneTestRow?
+    @State private var candidateID: String?
+
+    private enum SettingsTab: Hashable { case setup, microphones, preferences }
+
+    init(controller: AppController, settings: SettingsStore, devices: AudioDeviceManager, models: ModelManager) {
+        self.controller = controller
+        self.settings = settings
+        self.devices = devices
+        self.models = models
+        _microphoneTest = ObservedObject(wrappedValue: controller.microphoneTest)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -19,7 +33,9 @@ struct SettingsView: View {
                     Text(controller.statusText).font(.callout).foregroundStyle(.secondary).lineLimit(3)
                 }
                 Spacer()
-                if controller.isBusy {
+                if microphoneTest.isBusy {
+                    Button("Cancel Test") { microphoneTest.cancel() }
+                } else if controller.isBusy {
                     Button("Cancel Dictation") { controller.cancelSession() }
                 }
             }
@@ -30,17 +46,22 @@ struct SettingsView: View {
                     Button("Copy Dictation") { controller.copyPendingTranscript() }
                 }.padding(10).background(Color.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
             }
-            TabView {
-                setupTab.tabItem { Label("Setup", systemImage: "checkmark.shield") }
-                microphoneTab.tabItem { Label("Microphones", systemImage: "mic") }
-                preferencesTab.tabItem { Label("Preferences", systemImage: "slider.horizontal.3") }
+            TabView(selection: $selectedTab) {
+                setupTab.tabItem { Label("Setup", systemImage: "checkmark.shield") }.tag(SettingsTab.setup)
+                microphoneTab.tabItem { Label("Microphones", systemImage: "mic") }.tag(SettingsTab.microphones)
+                preferencesTab.tabItem { Label("Preferences", systemImage: "slider.horizontal.3") }.tag(SettingsTab.preferences)
             }
-            Text("Audio stays in memory and is transcribed on this Mac. Air Whisper keeps no recording or transcript history.")
+            Text("Audio and test results stay in memory on this Mac. Air Whisper saves no recording or transcript history.")
                 .font(.caption).foregroundStyle(.secondary)
         }
         .padding(20)
         .frame(minWidth: 660, idealWidth: 690, minHeight: 640, idealHeight: 690)
         .onAppear { controller.refreshDevicesAndDisplays() }
+        .onChange(of: selectedTab) { tab in
+            if tab != .microphones { clearMicrophoneTestContext() }
+        }
+        .onChange(of: settings.value.microphoneMode) { _ in clearMicrophoneTestContext() }
+        .onDisappear { controller.microphoneTestContextChanged() }
     }
 
     private var setupTab: some View {
@@ -48,7 +69,7 @@ struct SettingsView: View {
             VStack(alignment: .leading, spacing: 18) {
                 GroupBox("Permissions") {
                     VStack(alignment: .leading, spacing: 14) {
-                        permissionRow("Microphone", detail: "Records only while you hold the push-to-talk key.",
+                        permissionRow("Microphone", detail: "Listens while you hold push-to-talk or explicitly run a microphone test.",
                                       granted: controller.microphoneAuthorized, action: controller.requestMicrophoneAccess)
                         Divider()
                         permissionRow("Accessibility", detail: "Enables the push-to-talk key, detects the target field and inserts dictated text.",
@@ -96,13 +117,24 @@ struct SettingsView: View {
                             .font(.caption).foregroundStyle(.secondary)
                     }.padding(8)
                 }
-                GroupBox("Start dictating") {
+                GroupBox("Check your microphone") {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("See the input level, identify a display's microphone, and try a short transcription before dictating.")
+                            .font(.callout).foregroundStyle(.secondary)
+                        Button("Open Microphone Tests") { selectedTab = .microphones }
+                        Text("The level meter only needs Microphone access. A transcription test also needs a ready model.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }.frame(maxWidth: .infinity, alignment: .leading).padding(8)
+                }
+                GroupBox("Finish with a real dictation") {
                     VStack(alignment: .leading, spacing: 6) {
                         Text("1. Focus a text field in another app.")
                         Text("2. Hold \(settings.value.hotkey.title), wait for “Listening”, then speak.")
                         Text("3. Release the key to transcribe and insert your words.")
                         Text("Pressing another key while holding push-to-talk cancels the recording. Keep the target field focused until insertion finishes.")
                             .font(.caption).foregroundStyle(.secondary).padding(.top, 4)
+                        Text("The microphone test checks sound and transcription. This final step also checks your hotkey and text insertion in the app you use.")
+                            .font(.caption).foregroundStyle(.secondary)
                     }.frame(maxWidth: .infinity, alignment: .leading).padding(8)
                 }
             }.padding(14)
@@ -122,44 +154,123 @@ struct SettingsView: View {
     }
 
     private var microphoneTab: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
-                GroupBox("Microphone selection") {
-                    VStack(alignment: .leading, spacing: 12) {
-                        Picker("Choose microphone", selection: $settings.value.microphoneMode) {
-                            Text("Follow focused display").tag(MicrophoneMode.auto)
-                            Text("Use one microphone").tag(MicrophoneMode.fixed)
-                        }
-                        microphonePicker(settings.value.microphoneMode == .auto ? "Fallback microphone" : "Microphone",
-                                         selection: Binding(get: { settings.value.fixedDeviceID ?? "" }, set: { settings.value.fixedDeviceID = $0.isEmpty ? nil : $0 }))
-                        Text("System default automatically prefers the built-in microphone when the default is a Bluetooth headset. An explicit choice always wins.")
-                            .font(.caption).foregroundStyle(.secondary)
-                        if devices.devices.isEmpty {
-                            Label("No microphones found. Connect a microphone, then refresh.", systemImage: "mic.slash")
-                                .foregroundStyle(.orange)
-                        }
-                    }.padding(8)
-                }
-                if settings.value.microphoneMode == .auto {
-                    GroupBox("Assign a microphone to each display") {
+        ScrollViewReader { proxy in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    GroupBox("Microphone selection") {
                         VStack(alignment: .leading, spacing: 12) {
-                            Text("Choose once for each display. Air Whisper remembers the device identity even when connection order changes.")
-                                .font(.callout).foregroundStyle(.secondary)
-                            ForEach(Array(controller.displays.enumerated()), id: \.element.id) { index, display in
-                                microphonePicker("Display \(index + 1): \(display.name)", selection: Binding(
-                                    get: { settings.value.screenMicrophones[display.id] ?? "" },
-                                    set: { settings.value.screenMicrophones[display.id] = $0.isEmpty ? nil : $0 }
-                                ), defaultTitle: "Use fallback microphone")
+                            Picker("Choose microphone", selection: $settings.value.microphoneMode) {
+                                Text("Follow focused display").tag(MicrophoneMode.auto)
+                                Text("Use one microphone").tag(MicrophoneMode.fixed)
                             }
-                            Button("Identify Displays") { controller.identifyDisplays() }
-                            Text("A missing assigned microphone falls back to your choice above. Identical displays need an explicit assignment; old numbered microphone labels are not imported.")
+                            microphoneRouteRow(
+                                settings.value.microphoneMode == .auto ? "Fallback microphone" : "Microphone",
+                                selection: Binding(get: { settings.value.fixedDeviceID ?? "" }, set: {
+                                    clearMicrophoneTestContext()
+                                    settings.value.fixedDeviceID = $0.isEmpty ? nil : $0
+                                }),
+                                row: settings.value.microphoneMode == .auto ? .fallback : .fixed,
+                                proxy: proxy
+                            )
+                            Text("Automatic selection prefers the built-in microphone when the system default is a Bluetooth headset. An explicit choice always wins.")
                                 .font(.caption).foregroundStyle(.secondary)
+                            if devices.devices.isEmpty {
+                                Label("No microphones found. Connect a microphone, then refresh.", systemImage: "mic.slash")
+                                    .foregroundStyle(.orange)
+                            }
                         }.padding(8)
+                    }.disabled(controller.isBusy)
+                    if settings.value.microphoneMode == .auto {
+                        GroupBox("Assign a microphone to each display") {
+                            VStack(alignment: .leading, spacing: 12) {
+                                HStack(alignment: .top) {
+                                    Text("Identify your displays, then test a microphone near each one before assigning it.")
+                                        .font(.callout).foregroundStyle(.secondary)
+                                    Spacer()
+                                    Button("Identify Displays") { controller.identifyDisplays() }
+                                }
+                                ForEach(Array(controller.displays.enumerated()), id: \.element.id) { index, display in
+                                    microphoneRouteRow("Display \(index + 1): \(display.name)", selection: Binding(
+                                        get: { settings.value.screenMicrophones[display.id] ?? "" },
+                                        set: {
+                                            clearMicrophoneTestContext()
+                                            settings.value.screenMicrophones[display.id] = $0.isEmpty ? nil : $0
+                                        }
+                                    ), defaultTitle: "Use fallback microphone", row: .display(display.id), proxy: proxy)
+                                }
+                                Text("Assignments use stable device identities. The letters beside same-named microphones distinguish devices, not their physical positions.")
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }.padding(8)
+                        }.disabled(controller.isBusy)
                     }
-                }
-                Button("Refresh Microphones and Displays") { controller.refreshDevicesAndDisplays() }
-            }.padding(14).disabled(controller.isBusy)
+                    Group {
+                        if let testRow {
+                            MicrophoneTestPanel(controller: controller, test: microphoneTest, devices: devices,
+                                                row: testRow, rowTitle: title(for: testRow),
+                                                savedCandidateID: savedCandidate(for: testRow),
+                                                candidateID: $candidateID,
+                                                showSetup: { selectedTab = .setup })
+                        } else {
+                            GroupBox("Test microphone") {
+                                Text("Choose Test beside a microphone or display above. Check its input level, then record a short transcription test.")
+                                    .font(.callout).foregroundStyle(.secondary)
+                                    .frame(maxWidth: .infinity, alignment: .leading).padding(8)
+                            }
+                        }
+                    }.id("microphone-test")
+                    Button("Refresh Microphones and Displays") { controller.refreshDevicesAndDisplays() }
+                        .disabled(controller.isBusy)
+                }.padding(14)
+            }
         }
+    }
+
+    private func microphoneRouteRow(_ title: String, selection: Binding<String>, defaultTitle: String = "Automatic",
+                                    row: MicrophoneTestRow, proxy: ScrollViewProxy) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            HStack {
+                microphonePicker(title, selection: selection, defaultTitle: defaultTitle)
+                Button("Test") {
+                    controller.microphoneTestContextChanged()
+                    testRow = row
+                    candidateID = savedCandidate(for: row)
+                    withAnimation { proxy.scrollTo("microphone-test", anchor: .top) }
+                }.accessibilityLabel("Test \(title)")
+            }
+            if let resolved = controller.resolvedMicrophone(for: row) {
+                Text("Uses \(resolved.name)").font(.caption)
+                if let reason = resolved.fallbackReason {
+                    Label(reason, systemImage: "arrow.triangle.branch")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            } else {
+                Label("No available microphone", systemImage: "mic.slash")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private func savedCandidate(for row: MicrophoneTestRow) -> String? {
+        switch row {
+        case .display(let id): return settings.value.screenMicrophones[id]
+        case .fallback, .fixed: return settings.value.fixedDeviceID
+        }
+    }
+
+    private func title(for row: MicrophoneTestRow) -> String {
+        switch row {
+        case .display(let id):
+            guard let index = controller.displays.firstIndex(where: { $0.id == id }) else { return "Disconnected display" }
+            return "Display \(index + 1): \(controller.displays[index].name)"
+        case .fallback: return "Fallback microphone"
+        case .fixed: return "Fixed microphone"
+        }
+    }
+
+    private func clearMicrophoneTestContext() {
+        controller.microphoneTestContextChanged()
+        testRow = nil
+        candidateID = nil
     }
 
     private func microphonePicker(_ title: String, selection: Binding<String>, defaultTitle: String = "System default") -> some View {

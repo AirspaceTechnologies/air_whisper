@@ -22,14 +22,14 @@ public enum AudioRecordingError: LocalizedError {
 }
 
 enum CaptureEvent {
-    case firstSamples, failure(AudioRecordingError), limitReached
+    case firstSamples, level(AudioLevel), failure(AudioRecordingError), limitReached
 }
 
 protocol AudioCaptureDriving: AnyObject {
     // Submit operations synchronously from the caller's actor before suspending.
     // Otherwise a generic-executor hop can reorder cancel ahead of its start.
     @MainActor
-    func start(id: UUID, deviceID: String, maximumDuration: TimeInterval, event: @escaping (UUID, CaptureEvent) -> Void) async throws
+    func start(id: UUID, deviceID: String, maximumDuration: TimeInterval, mode: AudioCaptureMode, event: @escaping (UUID, CaptureEvent) -> Void) async throws
     @MainActor
     func stop(id: UUID) async throws -> CapturedAudio
     @MainActor
@@ -40,6 +40,7 @@ protocol AudioCaptureDriving: AnyObject {
 @MainActor
 public final class AudioRecorder {
     public var onFirstSamples: (() -> Void)?
+    public var onLevel: ((AudioLevel) -> Void)?
     public var onFailure: ((String) -> Void)?
     public var onLimitReached: (() -> Void)?
 
@@ -60,7 +61,7 @@ public final class AudioRecorder {
 
     deinit { driver.shutdown() }
 
-    public func start(deviceID: String, maximumDuration: TimeInterval) async throws {
+    public func start(deviceID: String, maximumDuration: TimeInterval, mode: AudioCaptureMode = .recording) async throws {
         guard ownedID == nil else { throw AudioRecordingError.alreadyRecording }
         _ = try LimitedAudioBuffer(maximumDuration: maximumDuration)
         let id = UUID()
@@ -73,11 +74,12 @@ public final class AudioRecorder {
                 try Task.checkCancellation()
                 guard activeID == id else { throw CancellationError() }
                 guard granted else { throw AudioRecordingError.permissionDenied }
-                try await driver.start(id: id, deviceID: deviceID, maximumDuration: maximumDuration) { [weak self] eventID, event in
+                try await driver.start(id: id, deviceID: deviceID, maximumDuration: maximumDuration, mode: mode) { [weak self] eventID, event in
                     Task { @MainActor [weak self] in
                         guard let self, self.activeID == eventID else { return }
                         switch event {
                         case .firstSamples: self.onFirstSamples?()
+                        case .level(let level): self.onLevel?(level)
                         case .failure(let error): self.onFailure?(error.localizedDescription)
                         case .limitReached: self.onLimitReached?()
                         }
@@ -133,7 +135,7 @@ private final class CaptureWorker: NSObject, AudioCaptureDriving, AVCaptureAudio
     private var session: AVCaptureSession?
     private var output: AVCaptureAudioDataOutput?
     private var converter: PCMConverter?
-    private var buffer: LimitedAudioBuffer?
+    private var samples: CaptureSampleProcessor?
     private var failure: AudioRecordingError?
     private var firstSamplesSent = false
     private var event: ((UUID, CaptureEvent) -> Void)?
@@ -142,12 +144,12 @@ private final class CaptureWorker: NSObject, AudioCaptureDriving, AVCaptureAudio
     private var observers: [NSObjectProtocol] = []
 
     @MainActor
-    func start(id: UUID, deviceID: String, maximumDuration: TimeInterval, event: @escaping (UUID, CaptureEvent) -> Void) async throws {
+    func start(id: UUID, deviceID: String, maximumDuration: TimeInterval, mode: AudioCaptureMode, event: @escaping (UUID, CaptureEvent) -> Void) async throws {
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             queue.async {
                 do {
                     guard self.activeID == nil else { throw AudioRecordingError.alreadyRecording }
-                    let buffer = try LimitedAudioBuffer(maximumDuration: maximumDuration)
+                    let samples = try CaptureSampleProcessor(mode: mode, maximumDuration: maximumDuration)
                     guard let device = AVCaptureDevice(uniqueID: deviceID), device.isConnected, device.hasMediaType(.audio) else {
                         throw AudioRecordingError.deviceUnavailable
                     }
@@ -170,7 +172,7 @@ private final class CaptureWorker: NSObject, AudioCaptureDriving, AVCaptureAudio
                     self.activeID = id
                     self.session = session
                     self.output = output
-                    self.buffer = buffer
+                    self.samples = samples
                     self.converter = PCMConverter()
                     self.failure = nil
                     self.firstSamplesSent = false
@@ -200,8 +202,10 @@ private final class CaptureWorker: NSObject, AudioCaptureDriving, AVCaptureAudio
                 self.releaseMicrophone()
                 do {
                     if let failure = self.failure { throw failure }
-                    if let tail = try self.converter?.finish() { self.buffer?.append(tail) }
-                    continuation.resume(returning: CapturedAudio(samples: self.buffer?.samples ?? []))
+                    if let tail = try self.converter?.finish() {
+                        _ = try self.samples?.append(tail, now: ProcessInfo.processInfo.systemUptime)
+                    }
+                    continuation.resume(returning: CapturedAudio(samples: self.samples?.samples ?? []))
                 } catch { continuation.resume(throwing: error) }
             }
         }
@@ -224,16 +228,17 @@ private final class CaptureWorker: NSObject, AudioCaptureDriving, AVCaptureAudio
     func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
         guard self.output === output, let id = activeID, session != nil, failure == nil else { return }
         do {
-            let samples = try converter?.convert(sampleBuffer) ?? []
-            guard !samples.isEmpty else { return }
-            buffer?.append(samples)
+            let converted = try converter?.convert(sampleBuffer) ?? []
+            guard !converted.isEmpty else { return }
+            let level = try samples?.append(converted, now: ProcessInfo.processInfo.systemUptime)
             if !firstSamplesSent {
                 firstSamplesSent = true
                 firstFrameTimer?.cancel()
                 firstFrameTimer = nil
                 event?(id, .firstSamples)
             }
-            if buffer?.isFull == true { reachLimit(id: id) }
+            if let level { event?(id, .level(level)) }
+            if samples?.isFull == true { reachLimit(id: id) }
         } catch { fail(.conversionFailed, id: id) }
     }
 
@@ -274,7 +279,9 @@ private final class CaptureWorker: NSObject, AudioCaptureDriving, AVCaptureAudio
         guard activeID == id, session != nil, failure == nil else { return }
         releaseMicrophone()
         do {
-            if let tail = try converter?.finish() { buffer?.append(tail) }
+            if let tail = try converter?.finish() {
+                _ = try samples?.append(tail, now: ProcessInfo.processInfo.systemUptime)
+            }
         } catch {
             fail(.conversionFailed, id: id)
             return
@@ -287,7 +294,7 @@ private final class CaptureWorker: NSObject, AudioCaptureDriving, AVCaptureAudio
         failure = error
         releaseMicrophone()
         converter = nil
-        buffer = nil
+        samples = nil
         event?(id, .failure(error))
     }
 
@@ -308,7 +315,7 @@ private final class CaptureWorker: NSObject, AudioCaptureDriving, AVCaptureAudio
         releaseMicrophone()
         activeID = nil
         converter = nil
-        buffer = nil
+        samples = nil
         failure = nil
         event = nil
         firstSamplesSent = false
