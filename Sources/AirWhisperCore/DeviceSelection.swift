@@ -1,19 +1,24 @@
 import Foundation
 
 public struct DeviceSelection: Equatable, Sendable {
+    public enum Source: Sendable { case matchedDisplay, assignedDisplay, fallback, systemDefault }
     public let device: AudioInputDevice
     public let missingPreferredDevice: Bool
+    public let source: Source
 
-    public static func resolve(devices: [AudioInputDevice], settings: DictationSettings, screenID: String?) -> DeviceSelection? {
-        var preferredIDs: [String] = []
-        if settings.microphoneMode == .auto, let screenID, let assigned = settings.screenMicrophones[screenID] {
-            preferredIDs.append(assigned)
+    public static func resolve(devices: [AudioInputDevice], settings: DictationSettings, screenID: String?,
+                               automaticMicrophones: [String: String] = [:]) -> DeviceSelection? {
+        var preferredIDs: [(String, Source)] = []
+        if settings.microphoneMode == .auto, let screenID {
+            if let override = settings.displayMicrophoneOverrides?[screenID] { preferredIDs.append((override, .assignedDisplay)) }
+            if let matched = automaticMicrophones[screenID] { preferredIDs.append((matched, .matchedDisplay)) }
+            else if let assigned = settings.screenMicrophones[screenID] { preferredIDs.append((assigned, .assignedDisplay)) }
         }
-        if let fixed = settings.fixedDeviceID { preferredIDs.append(fixed) }
+        if let fixed = settings.fixedDeviceID { preferredIDs.append((fixed, .fallback)) }
         var missing = false
-        for id in preferredIDs {
+        for (id, source) in preferredIDs {
             if let device = devices.first(where: { $0.id == id }) {
-                return DeviceSelection(device: device, missingPreferredDevice: missing)
+                return DeviceSelection(device: device, missingPreferredDevice: missing, source: source)
             }
             missing = true
         }
@@ -25,6 +30,6 @@ public struct DeviceSelection: Equatable, Sendable {
         } else {
             fallback = systemDefault ?? devices.first(where: \.isBuiltIn) ?? devices.first
         }
-        return fallback.map { DeviceSelection(device: $0, missingPreferredDevice: missing) }
+        return fallback.map { DeviceSelection(device: $0, missingPreferredDevice: missing, source: .systemDefault) }
     }
 }

@@ -2,7 +2,7 @@ import AppKit
 import SwiftUI
 
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWindowDelegate {
     private var controller: AppController!
     private var statusItem: NSStatusItem!
     private var settingsWindow: NSWindow?
@@ -57,7 +57,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(status)
         menu.addItem(.separator())
         if controller.isBusy { add("Cancel Dictation", action: #selector(cancelDictation), to: menu) }
-        if controller.pendingTranscript != nil { add("Copy Dictation", action: #selector(copyDictation), to: menu) }
+        if controller.latestTranscript != nil { add("Copy Dictation", action: #selector(copyDictation), to: menu) }
         add("Settings…", action: #selector(showSettings), key: ",", to: menu)
         add("Reset Dictation", action: #selector(resetDictation), to: menu)
         menu.addItem(.separator())
@@ -86,11 +86,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc private func showSettings() {
         if settingsWindow == nil {
             let content = SettingsView(controller: controller, settings: controller.settings,
-                                       devices: controller.devices, models: controller.models)
+                                       devices: controller.devices, models: controller.models,
+                                       microphoneTester: controller.microphoneTester)
             let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 690, height: 690),
                                   styleMask: [.titled, .closable, .miniaturizable, .resizable],
                                   backing: .buffered, defer: false)
             window.title = "Air Whisper Settings"
+            window.delegate = self
             window.contentView = NSHostingView(rootView: content)
             window.isReleasedWhenClosed = false
             window.minSize = NSSize(width: 660, height: 640)
@@ -103,7 +105,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     @objc private func cancelDictation() { controller.cancelSession() }
+    func windowWillClose(_ notification: Notification) { controller.stopMicrophoneTest() }
     @objc private func resetDictation() { controller.reset() }
-    @objc private func copyDictation() { controller.copyPendingTranscript() }
+    @objc private func copyDictation() { controller.copyLatestTranscript() }
     @objc private func quit() { NSApp.terminate(nil) }
 }

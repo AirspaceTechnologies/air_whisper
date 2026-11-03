@@ -1,6 +1,7 @@
 import AppKit
 import AVFoundation
 import Combine
+import Carbon
 import ServiceManagement
 import SwiftUI
 import AirWhisperCore
@@ -26,20 +27,25 @@ final class AppController: ObservableObject {
     let settings = SettingsStore()
     let devices = AudioDeviceManager()
     let models = ModelManager()
+    let microphoneTester = MicrophoneTester()
     @Published private(set) var phase: Phase = .idle
     @Published private(set) var microphoneAuthorized = false
     @Published private(set) var accessibilityAuthorized = false
     @Published private(set) var monitoringAuthorized = false
     @Published private(set) var hotkeyActive = false
+    @Published private(set) var secureInputActive = false
+    @Published private(set) var lastHotkeyDetected: Date?
     @Published private(set) var modelReady = false
     @Published private(set) var preparingModel = false
     @Published private(set) var downloadingModel = false
     @Published private(set) var message: String?
     @Published private(set) var activeMicrophone = ""
-    @Published private(set) var pendingTranscript: String?
+    var latestTranscript: String? { transcriptRecovery.text }
     @Published private(set) var loginEnabled = false
     @Published private(set) var loginNeedsApproval = false
     @Published private(set) var displays: [DisplayChoice] = []
+    @Published private(set) var automaticMicrophones: [String: String] = [:]
+    @Published private(set) var matchingMicrophones = false
     var onShowSettings: (() -> Void)?
     var onStatusChange: (() -> Void)?
 
@@ -49,6 +55,10 @@ final class AppController: ObservableObject {
     private let insertion = TextInsertion()
     private let accessibilityPreparation = AccessibilityPreparation()
     private let overlay = DictationOverlay()
+    private let microphoneTestOverlay = MicrophoneTestOverlay()
+    private var microphoneTestOperation: UUID?
+    private var matchingTask: Task<Void, Never>?
+    private var matchingTopology: [String] = []
     private var displayOverlays: [DictationOverlay] = []
     private var displayOverlayTask: Task<Void, Never>?
     private var sessionID: UUID?
@@ -63,7 +73,7 @@ final class AppController: ObservableObject {
     private var cancellationTask: Task<Void, Never>?
     private var modelTask: Task<Void, Never>?
     private var overlayTask: Task<Void, Never>?
-    private var pendingExpiryTask: Task<Void, Never>?
+    private let transcriptRecovery = TranscriptRecovery()
     private var permissionTimer: Timer?
     private var guardTimer: Timer?
     private var observation = Set<AnyCancellable>()
@@ -74,15 +84,16 @@ final class AppController: ObservableObject {
     private var suspended: Bool { !suspensionReasons.isEmpty }
 
     var isBusy: Bool { phase != .idle }
-    var setupComplete: Bool { microphoneAuthorized && accessibilityAuthorized && hotkeyActive && modelReady }
+    var setupComplete: Bool { microphoneAuthorized && accessibilityAuthorized && keyboard.isRunning && !secureInputActive && modelReady }
     var statusText: String {
         if isBusy { return phase.title }
         if !accessibilityAuthorized { return "Accessibility access required — open Air Whisper Settings." }
         if !microphoneAuthorized { return "Microphone access required — open Air Whisper Settings." }
         if suspended { return "Dictation is paused while this Mac is inactive." }
+        if secureInputActive { return "Keyboard access is paused by macOS Secure Input. Finish password entry in the other app, then try again." }
         if !hotkeyActive {
             return monitoringAuthorized
-                ? "Keyboard shortcut unavailable — reopen Air Whisper."
+                ? "macOS is blocking the keyboard listener. Re-add Air Whisper in Accessibility and Input Monitoring, then reopen it."
                 : "Input Monitoring access required — open Air Whisper Settings."
         }
         if preparingModel { return "Loading transcription model…" }
@@ -93,11 +104,21 @@ final class AppController: ObservableObject {
     }
 
     func launch() {
+        DictationDiagnostics.enableLocalFileLogging()
+        DictationDiagnostics.session.notice("launch version=\(AppVersion.appTitle)")
+        transcriptRecovery.objectWillChange.sink { [weak self] in
+            self?.objectWillChange.send()
+        }.store(in: &observation)
         keyboard.key = settings.value.hotkey
         keyboard.onPress = { [weak self] in self?.beginRecording() }
+        keyboard.onAvailabilityChange = { [weak self] available in self?.hotkeyActive = available }
         keyboard.onRelease = { [weak self] in self?.finishRecording() }
         keyboard.onCancel = { [weak self] in self?.cancelSession() }
         displays = DisplayContext.displays
+        refreshAutomaticMicrophones(devices: devices.devices)
+        devices.$devices.dropFirst().removeDuplicates().sink { [weak self] devices in
+            self?.refreshAutomaticMicrophones(devices: devices)
+        }.store(in: &observation)
         refreshPermissions()
         refreshLoginStatus()
         settings.$value.dropFirst().removeDuplicates().sink { [weak self] next in
@@ -135,13 +156,22 @@ final class AppController: ObservableObject {
     }
 
     func refreshPermissions() {
+        let previous = [microphoneAuthorized, accessibilityAuthorized, monitoringAuthorized, secureInputActive]
         microphoneAuthorized = AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
         let hadAccessibilityAccess = accessibilityAuthorized
         accessibilityAuthorized = AXIsProcessTrusted()
         monitoringAuthorized = CGPreflightListenEventAccess()
+        secureInputActive = IsSecureEventInputEnabled()
+        if previous != [microphoneAuthorized, accessibilityAuthorized, monitoringAuthorized, secureInputActive] {
+            DictationDiagnostics.session.notice("permissions microphone=\(self.microphoneAuthorized) accessibility=\(self.accessibilityAuthorized) input_monitoring=\(self.monitoringAuthorized) secure_input=\(self.secureInputActive)")
+        }
         if accessibilityAuthorized && !hadAccessibilityAccess { prepareFocusedApplication() }
+        if !microphoneAuthorized { stopMicrophoneTest() }
         if !microphoneAuthorized || !accessibilityAuthorized {
             if isBusy { cancelSession(message: "A required permission was removed. Open Settings to restore access.") }
+        }
+        if secureInputActive && (phase == .starting || phase == .listening) {
+            cancelSession(message: "macOS Secure Input interrupted keyboard access. Finish password entry, then try again.")
         }
         updateKeyboardMonitor()
     }
@@ -153,7 +183,7 @@ final class AppController: ObservableObject {
 
     private func updateKeyboardMonitor(restart: Bool = false) {
         if restart { keyboard.stop() }
-        if accessibilityAuthorized && !suspended && !quitting {
+        if accessibilityAuthorized && !secureInputActive && !suspended && !quitting {
             if !keyboard.isRunning { _ = keyboard.start() }
         } else {
             keyboard.stop()
@@ -303,8 +333,55 @@ final class AppController: ObservableObject {
     func refreshDevicesAndDisplays() {
         devices.refresh()
         displays = DisplayContext.displays
+        refreshAutomaticMicrophones(devices: devices.devices, force: true)
         refreshPermissions()
         refreshLoginStatus()
+    }
+
+    private func refreshAutomaticMicrophones(devices candidates: [AudioInputDevice], force: Bool = false) {
+        guard !quitting else { return }
+        displays = DisplayContext.displays
+        let snapshots = displays.compactMap { display in
+            display.number.map { DisplayMicrophoneDiscovery.Display(id: display.id, number: $0) }
+        }
+        let topology = snapshots.map { "\($0.id):\($0.number)" }.sorted() + candidates.map(\.id).sorted()
+        guard force || topology != matchingTopology else { return }
+        matchingTopology = topology
+        matchingTask?.cancel()
+        automaticMicrophones = automaticMicrophones.filter { id, device in
+            snapshots.contains(where: { $0.id == id }) && candidates.contains(where: { $0.id == device })
+        }
+        matchingMicrophones = true
+        matchingTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 250_000_000)
+            guard !Task.isCancelled else { return }
+            let matches = await Task.detached(priority: .utility) {
+                DisplayMicrophoneDiscovery.discover(displays: snapshots, devices: candidates)
+            }.value
+            guard !Task.isCancelled, let self else { return }
+            self.automaticMicrophones = matches
+            self.matchingMicrophones = false
+            DictationDiagnostics.session.notice("display_microphones_matched count=\(matches.count) displays=\(snapshots.count)")
+        }
+    }
+
+    func microphoneSelection(screenID: String?) -> DeviceSelection? {
+        DeviceSelection.resolve(devices: devices.devices, settings: settings.value, screenID: screenID,
+                                automaticMicrophones: automaticMicrophones)
+    }
+
+    func microphoneLabel(_ device: AudioInputDevice) -> String {
+        if let index = displays.firstIndex(where: { automaticMicrophones[$0.id] == device.id }) {
+            return "Display \(index + 1) microphone"
+        }
+        return DeviceDisplayName.label(for: device, among: devices.devices)
+    }
+
+    func setMicrophoneOverride(_ deviceID: String?, screenID: String) {
+        var overrides = settings.value.displayMicrophoneOverrides ?? [:]
+        overrides[screenID] = deviceID
+        settings.value.displayMicrophoneOverrides = overrides
+        settings.value.screenMicrophones[screenID] = nil
     }
 
     func identifyDisplays() {
@@ -323,19 +400,77 @@ final class AppController: ObservableObject {
         }
     }
 
+    func identifyMicrophone(screenID: String?) {
+        guard !isBusy, microphoneAuthorized,
+              let selected = microphoneSelection(screenID: screenID) else { return }
+        testMicrophone(deviceID: selected.device.id, screenID: screenID)
+    }
+
+    private func testMicrophone(deviceID: String, screenID: String?) {
+        let operation = UUID()
+        microphoneTestOperation = operation
+        Task { [weak self] in
+            guard let self else { return }
+            await self.microphoneTester.stopAndWait()
+            guard self.microphoneTestOperation == operation, !self.isBusy, !self.suspended,
+                  let device = self.devices.devices.first(where: { $0.id == deviceID }) else { return }
+            let displayIndex = self.displays.firstIndex(where: { $0.id == screenID })
+            let display = displayIndex.map { self.displays[$0] }
+            let title = displayIndex.map { "Display \($0 + 1): \(self.displays[$0].name)" } ?? "Microphone test"
+            self.microphoneTester.start(deviceID: deviceID)
+            self.microphoneTestOverlay.onClose = { [weak self] in self?.stopMicrophoneTest() }
+            self.microphoneTestOverlay.show(
+                tester: self.microphoneTester, screen: display?.screen,
+                displayTitle: title, microphoneTitle: self.microphoneLabel(device),
+                canAssign: display != nil && screenID.flatMap { self.automaticMicrophones[$0] } == nil,
+                canTryNext: screenID.flatMap { self.automaticMicrophones[$0] } == nil && self.devices.devices.count > 1,
+                next: { [weak self] in
+                    guard let self, let index = self.devices.devices.firstIndex(where: { $0.id == deviceID }),
+                          !self.devices.devices.isEmpty else { return }
+                    let nextDevice = self.devices.devices[(index + 1) % self.devices.devices.count]
+                    self.testMicrophone(deviceID: nextDevice.id, screenID: screenID)
+                },
+                assign: { [weak self] in
+                    guard let self, let screenID, self.devices.devices.contains(where: { $0.id == deviceID }),
+                          self.displays.contains(where: { $0.id == screenID }) else { return }
+                    self.setMicrophoneOverride(deviceID, screenID: screenID)
+                    self.stopMicrophoneTest()
+                    self.message = "Microphone assigned to \(title)."
+                },
+                stop: { [weak self] in self?.stopMicrophoneTest() }
+            )
+        }
+    }
+
+    func stopMicrophoneTest() {
+        microphoneTestOperation = nil
+        microphoneTestOverlay.hide()
+        microphoneTester.stop()
+    }
+
     private func beginRecording() {
-        guard !isBusy, !quitting, !suspended else { return }
+        lastHotkeyDetected = Date()
+        if NSWorkspace.shared.frontmostApplication?.processIdentifier == ProcessInfo.processInfo.processIdentifier {
+            message = "\(settings.value.hotkey.title) detected. Focus a text field in another app to dictate."
+            DictationDiagnostics.keyboard.notice("settings_hotkey_test_passed")
+            return
+        }
+        guard !isBusy, !quitting, !suspended else {
+            DictationDiagnostics.session.notice("start_ignored phase=\(self.phase.title) quitting=\(self.quitting) suspended=\(self.suspended)")
+            return
+        }
         guard setupComplete else {
+            DictationDiagnostics.session.notice("start_blocked microphone=\(self.microphoneAuthorized) accessibility=\(self.accessibilityAuthorized) hotkey=\(self.hotkeyActive) model=\(self.modelReady)")
             showNotice("Open Air Whisper Settings to finish setup.", symbol: "exclamationmark.circle")
             return
         }
+        stopMicrophoneTest()
         let screen = DisplayContext.focused()
-        guard let selected = DeviceSelection.resolve(devices: devices.devices, settings: settings.value, screenID: screen?.id) else {
+        guard let selected = microphoneSelection(screenID: screen?.id) else {
+            DictationDiagnostics.session.error("start_blocked no_microphone")
             showNotice("No microphone is available. Connect one and try again.", symbol: "mic.slash")
             return
         }
-        pendingExpiryTask?.cancel()
-        pendingTranscript = nil
         overlayTask?.cancel()
         message = nil
         sessionSettings = settings.value
@@ -344,31 +479,42 @@ final class AppController: ObservableObject {
         startedAt = Date()
         prepareFocusedApplication()
         insertionTarget = InsertionTarget.capture()
+        DictationDiagnostics.session.notice("recording_start session=\(id.uuidString) target_pid=\(self.insertionTarget?.processID ?? 0) focus_available=\(self.insertionTarget?.focusedElement != nil) mode=\(self.sessionSettings.pasteMode.rawValue)")
         activeScreen = screen?.screen
-        activeMicrophone = DeviceDisplayName.label(for: selected.device, among: devices.devices)
+        activeMicrophone = microphoneLabel(selected.device)
+        DictationDiagnostics.session.notice("microphone_route source=\(String(describing: selected.source)) fallback=\(selected.missingPreferredDevice)")
         phase = .starting
-        let fallback = selected.missingPreferredDevice ? " (preferred microphone unavailable)" : ""
-        overlay.show("Opening \(activeMicrophone)\(fallback)…", symbol: "mic", color: .orange, screen: activeScreen)
+        overlay.showWorking("Getting ready…", detail: "Speak when the waveform appears", screen: activeScreen)
         recorder.onFirstSamples = { [weak self] in
             guard let self, self.sessionID == id, self.phase == .starting else { return }
+            DictationDiagnostics.session.notice("first_audio session=\(id.uuidString)")
             self.phase = .listening
-            self.overlay.show("\(self.activeMicrophone) — listening…", symbol: "waveform", color: .red, screen: self.activeScreen)
+            self.overlay.showListening(key: self.sessionSettings.hotkey.title, screen: self.activeScreen)
+        }
+        recorder.onLevel = { [weak self] level in
+            guard let self, self.sessionID == id, self.phase == .listening else { return }
+            self.overlay.updateLevel(level)
         }
         recorder.onFailure = { [weak self] problem in
             guard let self, self.sessionID == id else { return }
+            DictationDiagnostics.session.error("capture_failure session=\(id.uuidString)")
             self.cancelSession(message: problem)
         }
         recorder.onLimitReached = { [weak self] in
             guard let self, self.sessionID == id else { return }
+            DictationDiagnostics.session.notice("recording_limit session=\(id.uuidString)")
             self.finishRecording()
         }
         startTask = Task { [weak self] in
             guard let self else { return }
             do {
+                await self.microphoneTester.stopAndWait()
+                guard self.sessionID == id, !Task.isCancelled else { return }
                 try await self.recorder.start(deviceID: selected.device.id, maximumDuration: self.sessionSettings.maximumDuration)
             } catch {
                 guard self.sessionID == id, !Task.isCancelled,
                       self.phase == .starting || self.phase == .listening else { return }
+                DictationDiagnostics.session.error("capture_start_failed session=\(id.uuidString) code=\((error as NSError).code)")
                 self.cancelSession(message: "Microphone could not start: \(error.localizedDescription)")
             }
         }
@@ -377,50 +523,56 @@ final class AppController: ObservableObject {
     private func finishRecording() {
         guard let id = sessionID, phase == .starting || phase == .listening else { return }
         if let startedAt, Date().timeIntervalSince(startedAt) < sessionSettings.minimumDuration {
+            DictationDiagnostics.session.notice("recording_too_short session=\(id.uuidString)")
             cancelSession()
             return
         }
+        DictationDiagnostics.session.notice("recording_stop session=\(id.uuidString)")
         phase = .stopping
-        overlay.show("Finishing recording…", symbol: "waveform", screen: activeScreen)
+        overlay.showWorking("Finishing up…", detail: "Preparing your recording", screen: activeScreen)
         processingTask = Task { [weak self] in
             guard let self else { return }
             do {
                 let audio = try await self.recorder.stop()
                 guard self.sessionID == id, !Task.isCancelled else { return }
+                DictationDiagnostics.session.notice("audio_captured session=\(id.uuidString) duration=\(audio.duration) samples=\(audio.samples.count)")
                 guard audio.duration >= 0.15 else {
                     self.completeSession(id: id)
                     self.showNotice("That recording was too short. Wait for Listening, then speak.", symbol: "mic")
                     return
                 }
                 self.phase = .transcribing
-                self.overlay.show("Transcribing…", symbol: "ellipsis.bubble", screen: self.activeScreen)
+                self.overlay.showWorking("Transcribing…", detail: "Turning your voice into words", screen: self.activeScreen)
+                let inferenceStart = ProcessInfo.processInfo.systemUptime
+                DictationDiagnostics.session.notice("transcription_start session=\(id.uuidString)")
                 let raw = try await self.transcriber.transcribe(audio, language: "en")
+                DictationDiagnostics.session.notice("transcription_finished session=\(id.uuidString) seconds=\(ProcessInfo.processInfo.systemUptime - inferenceStart) characters=\(raw.count)")
                 guard self.sessionID == id, !Task.isCancelled else { return }
                 guard let text = TextCleaner.clean(raw) else {
                     self.completeSession(id: id)
+                    DictationDiagnostics.session.notice("no_speech session=\(id.uuidString)")
                     self.showNotice("No speech was recognized.", symbol: "waveform")
                     return
                 }
+                // Posting an event cannot acknowledge that the destination inserted it.
+                // Retain every recognized result, including apparently successful pastes.
+                self.transcriptRecovery.retain(text)
                 let initialFocusUnavailable = self.insertionTarget?.focusedElement == nil
-                let pasted = self.insertionTarget.map {
+                let posted = self.insertionTarget.map {
                     self.insertion.insert(text, target: $0, mode: self.sessionSettings.pasteMode,
                                           restoreDelay: self.sessionSettings.restoreDelay)
                 } ?? false
+                DictationDiagnostics.session.notice("insertion_result session=\(id.uuidString) event_posted=\(posted) delivery_unverified=true")
                 self.completeSession(id: id)
-                if !pasted {
-                    self.pendingTranscript = text
-                    self.pendingExpiryTask = Task { [weak self] in
-                        try? await Task.sleep(nanoseconds: 300_000_000_000)
-                        guard !Task.isCancelled else { return }
-                        self?.pendingTranscript = nil
-                    }
+                if !posted {
                     let notice = initialFocusUnavailable
-                        ? "The text field wasn't available when dictation started. Copy from the menu; wait a moment and try again."
-                        : "Focus changed or insertion was unavailable. Copy dictation from the menu."
+                        ? "Copy your words from the Air Whisper menu, then paste into the text field."
+                        : "The destination changed. Your words are available under Copy Dictation in the menu."
                     self.showNotice(notice, symbol: "doc.on.clipboard")
                 }
             } catch {
                 guard self.sessionID == id, !Task.isCancelled else { return }
+                DictationDiagnostics.session.error("dictation_failed session=\(id.uuidString) phase=\(self.phase.title) code=\((error as NSError).code)")
                 self.cancelSession(message: "Dictation failed: \(error.localizedDescription)")
             }
         }
@@ -442,6 +594,7 @@ final class AppController: ObservableObject {
             if let message { showNotice(message, symbol: "exclamationmark.triangle") }
             return
         }
+        DictationDiagnostics.session.notice("session_cancel phase=\(self.phase.title) session=\(self.sessionID?.uuidString ?? "none")")
         sessionID = nil
         startedAt = nil
         insertionTarget = nil
@@ -465,21 +618,27 @@ final class AppController: ObservableObject {
 
     func reset() {
         cancelSession()
+        stopMicrophoneTest()
         keyboard.resetHeldState()
+        keyboard.stop()
         message = nil
-        pendingTranscript = nil
-        pendingExpiryTask?.cancel()
+        transcriptRecovery.clear()
         refreshDevicesAndDisplays()
         if !isBusy && !modelReady && !downloadingModel { prepareModel() }
     }
 
-    func copyPendingTranscript() {
-        guard let text = pendingTranscript else { return }
+    func recheckKeyboardAccess() {
+        keyboard.stop()
+        lastHotkeyDetected = nil
+        refreshPermissions()
+    }
+
+    func copyLatestTranscript() {
+        guard let text = latestTranscript else { return }
         insertion.restoreClipboardNow()
         NSPasteboard.general.clearContents()
         if NSPasteboard.general.setString(text, forType: .string) {
-            pendingTranscript = nil
-            pendingExpiryTask?.cancel()
+            DictationDiagnostics.session.notice("recovery_copied")
             message = "Dictation copied. Paste it into the intended field."
         }
     }
@@ -488,7 +647,8 @@ final class AppController: ObservableObject {
         guard !quitting, !suspended else { return }
         message = text
         overlayTask?.cancel()
-        overlay.show(text, symbol: symbol, color: .orange, screen: activeScreen ?? DisplayContext.focused()?.screen)
+        let title = symbol == "doc.on.clipboard" ? "Your dictation is ready" : "Let’s try that again"
+        overlay.showNotice(title: title, detail: text, symbol: symbol, screen: activeScreen ?? DisplayContext.focused()?.screen)
         overlayTask = Task { [weak self] in
             try? await Task.sleep(nanoseconds: 5_000_000_000)
             guard !Task.isCancelled else { return }
@@ -534,12 +694,16 @@ final class AppController: ObservableObject {
         notificationTokens.append(NotificationCenter.default.addObserver(
             forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main
         ) { [weak self] _ in
-            MainActor.assumeIsolated { self?.displays = DisplayContext.displays }
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.refreshAutomaticMicrophones(devices: self.devices.devices)
+            }
         })
     }
 
     private func suspend(reason: SuspensionReason) {
         suspensionReasons.insert(reason)
+        stopMicrophoneTest()
         cancelSession()
         keyboard.stop()
         hotkeyActive = false
@@ -547,7 +711,7 @@ final class AppController: ObservableObject {
         displayOverlayTask?.cancel()
         displayOverlays.forEach { $0.hide() }
         overlay.hide()
-        pendingTranscript = nil
+        transcriptRecovery.clear()
         insertion.restoreClipboardNow()
     }
 
@@ -559,6 +723,8 @@ final class AppController: ObservableObject {
 
     func shutdown() async {
         quitting = true
+        matchingTask?.cancel()
+        stopMicrophoneTest()
         sessionID = nil
         modelOperationID = nil
         keyboard.stop()
@@ -570,13 +736,13 @@ final class AppController: ObservableObject {
         overlayTask?.cancel()
         displayOverlayTask?.cancel()
         displayOverlays.forEach { $0.hide() }
-        pendingExpiryTask?.cancel()
         models.cancelDownload()
         transcriber.cancel()
         overlay.hide()
-        pendingTranscript = nil
+        transcriptRecovery.clear()
         insertion.restoreClipboardNow()
         await recorder.cancel()
+        await microphoneTester.stopAndWait()
         await transcriber.unload()
     }
 }

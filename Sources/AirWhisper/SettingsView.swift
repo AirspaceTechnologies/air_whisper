@@ -8,6 +8,8 @@ struct SettingsView: View {
     @ObservedObject var settings: SettingsStore
     @ObservedObject var devices: AudioDeviceManager
     @ObservedObject var models: ModelManager
+    @ObservedObject var microphoneTester: MicrophoneTester
+    @State private var showAdvancedMicrophones = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -23,11 +25,11 @@ struct SettingsView: View {
                     Button("Cancel Dictation") { controller.cancelSession() }
                 }
             }
-            if controller.pendingTranscript != nil {
+            if controller.latestTranscript != nil {
                 HStack {
-                    Text("Dictation is waiting to be copied. It expires after five minutes.").font(.callout)
+                    Text("Your last dictation is available to copy for five minutes.").font(.callout)
                     Spacer()
-                    Button("Copy Dictation") { controller.copyPendingTranscript() }
+                    Button("Copy Dictation") { controller.copyLatestTranscript() }
                 }.padding(10).background(Color.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
             }
             TabView {
@@ -53,8 +55,8 @@ struct SettingsView: View {
                         Divider()
                         permissionRow("Accessibility", detail: "Enables the push-to-talk key, detects the target field and inserts dictated text.",
                                       granted: controller.accessibilityAuthorized, action: controller.requestAccessibilityAccess)
-                        if !controller.accessibilityAuthorized {
-                            Text("If macOS already shows Air Whisper as enabled after an update, quit Air Whisper, remove its Accessibility entry with −, then use + to add the installed app again. Enable access and reopen Air Whisper.")
+                        if !controller.accessibilityAuthorized || !controller.hotkeyActive {
+                            Text("After an update, macOS may still trust an older build. Quit Air Whisper, remove its old entry with − in Accessibility and Input Monitoring, then use + to add /Applications/Air Whisper.app again. Enable access and reopen Air Whisper.")
                                 .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                         }
                         if !controller.hotkeyActive {
@@ -63,6 +65,22 @@ struct SettingsView: View {
                                           granted: controller.monitoringAuthorized, action: controller.requestMonitoringAccess)
                         }
                     }.padding(8)
+                }
+                GroupBox("Keyboard access check") {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Label(controller.hotkeyActive ? "Keyboard listener is enabled" : "Keyboard listener is blocked",
+                              systemImage: controller.hotkeyActive ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                            .foregroundStyle(controller.hotkeyActive ? Color.green : Color.orange)
+                        if controller.secureInputActive {
+                            Text("macOS Secure Input is active. Finish password entry in the other app before testing.")
+                        }
+                        Text("Hold \(settings.value.hotkey.title) here to test detection. This check does not record audio.")
+                        if let detected = controller.lastHotkeyDetected {
+                            Text("Shortcut received at \(detected.formatted(date: .omitted, time: .standard)).")
+                                .foregroundStyle(.green)
+                        }
+                        Button("Recheck Keyboard Access") { controller.recheckKeyboardAccess() }
+                    }.frame(maxWidth: .infinity, alignment: .leading).padding(8)
                 }
                 GroupBox("Transcription model") {
                     VStack(alignment: .leading, spacing: 12) {
@@ -124,54 +142,111 @@ struct SettingsView: View {
     private var microphoneTab: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
-                GroupBox("Microphone selection") {
+                GroupBox("Microphone") {
                     VStack(alignment: .leading, spacing: 12) {
-                        Picker("Choose microphone", selection: $settings.value.microphoneMode) {
-                            Text("Follow focused display").tag(MicrophoneMode.auto)
-                            Text("Use one microphone").tag(MicrophoneMode.fixed)
+                        Picker("Use", selection: $settings.value.microphoneMode) {
+                            Text("Automatic · follow active display").tag(MicrophoneMode.auto)
+                            Text("One microphone everywhere").tag(MicrophoneMode.fixed)
+                        }.disabled(microphoneTester.isRunning)
+                        if settings.value.microphoneMode == .auto {
+                            Text("Uses the microphone built into the display you’re working on. Matching happens automatically.")
+                                .font(.callout).foregroundStyle(.secondary)
+                        } else {
+                            microphonePicker("Microphone", selection: Binding(
+                                get: { settings.value.fixedDeviceID ?? "" },
+                                set: { settings.value.fixedDeviceID = $0.isEmpty ? nil : $0 }))
+                            microphoneTestButton(screenID: nil)
                         }
-                        microphonePicker(settings.value.microphoneMode == .auto ? "Fallback microphone" : "Microphone",
-                                         selection: Binding(get: { settings.value.fixedDeviceID ?? "" }, set: { settings.value.fixedDeviceID = $0.isEmpty ? nil : $0 }))
-                        Text("System default automatically prefers the built-in microphone when the default is a Bluetooth headset. An explicit choice always wins.")
-                            .font(.caption).foregroundStyle(.secondary)
                         if devices.devices.isEmpty {
-                            Label("No microphones found. Connect a microphone, then refresh.", systemImage: "mic.slash")
-                                .foregroundStyle(.orange)
+                            Label("No microphones connected", systemImage: "mic.slash").foregroundStyle(.orange)
                         }
-                    }.padding(8)
+                    }.padding(10)
                 }
                 if settings.value.microphoneMode == .auto {
-                    GroupBox("Assign a microphone to each display") {
-                        VStack(alignment: .leading, spacing: 12) {
-                            Text("Choose once for each display. Air Whisper remembers the device identity even when connection order changes.")
-                                .font(.callout).foregroundStyle(.secondary)
-                            ForEach(Array(controller.displays.enumerated()), id: \.element.id) { index, display in
-                                microphonePicker("Display \(index + 1): \(display.name)", selection: Binding(
-                                    get: { settings.value.screenMicrophones[display.id] ?? "" },
-                                    set: { settings.value.screenMicrophones[display.id] = $0.isEmpty ? nil : $0 }
-                                ), defaultTitle: "Use fallback microphone")
+                    GroupBox("Your displays") {
+                        VStack(alignment: .leading, spacing: 14) {
+                            if controller.matchingMicrophones {
+                                HStack { ProgressView().controlSize(.small); Text("Finding display microphones…").font(.callout) }
                             }
-                            Button("Identify Displays") { controller.identifyDisplays() }
-                            Text("A missing assigned microphone falls back to your choice above. Identical displays need an explicit assignment; old numbered microphone labels are not imported.")
-                                .font(.caption).foregroundStyle(.secondary)
+                            ForEach(Array(controller.displays.enumerated()), id: \.element.id) { index, display in
+                                let selection = controller.microphoneSelection(screenID: display.id)
+                                DisplayMicrophoneRow(
+                                    title: "Display \(index + 1) · \(display.name)",
+                                    detail: microphoneRouteDescription(selection),
+                                    automatic: selection?.source == .matchedDisplay,
+                                    testEnabled: selection != nil && controller.microphoneAuthorized && !microphoneTester.isRunning,
+                                    test: { controller.identifyMicrophone(screenID: display.id) })
+                                if index < controller.displays.count - 1 { Divider() }
+                            }
+                            HStack {
+                                Button("Identify Displays") { controller.identifyDisplays() }
+                                Spacer()
+                                Button("Refresh") { controller.refreshDevicesAndDisplays() }
+                            }
+                        }.padding(10)
+                    }
+                }
+                if microphoneTester.isRunning {
+                    GroupBox("Sound check") {
+                        VStack(alignment: .leading, spacing: 8) {
+                            MicrophoneLevelGraph(levels: microphoneTester.levelHistory).frame(height: 100)
+                            HStack {
+                                Text("Speak normally to check the input.").foregroundStyle(.secondary)
+                                Spacer()
+                                Button("Stop") { controller.stopMicrophoneTest() }.disabled(microphoneTester.isStopping)
+                            }
                         }.padding(8)
                     }
                 }
-                Button("Refresh Microphones and Displays") { controller.refreshDevicesAndDisplays() }
+                DisclosureGroup("Advanced microphone options", isExpanded: $showAdvancedMicrophones) {
+                    VStack(alignment: .leading, spacing: 14) {
+                        if settings.value.microphoneMode == .auto {
+                            microphonePicker("Fallback microphone", selection: Binding(
+                                get: { settings.value.fixedDeviceID ?? "" },
+                                set: { settings.value.fixedDeviceID = $0.isEmpty ? nil : $0 }))
+                            Text("Used when a display has no matched microphone. System default avoids Bluetooth when a built-in microphone is available.")
+                                .font(.caption).foregroundStyle(.secondary)
+                            ForEach(Array(controller.displays.enumerated()), id: \.element.id) { index, display in
+                                microphonePicker("Display \(index + 1) override", selection: Binding(
+                                    get: { settings.value.displayMicrophoneOverrides?[display.id] ?? "" },
+                                    set: { controller.setMicrophoneOverride($0.isEmpty ? nil : $0, screenID: display.id) }
+                                ), defaultTitle: "Automatic")
+                            }
+                            Text("Choose an override only if you prefer a different microphone for that display.")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                        Button("Refresh devices") { controller.refreshDevicesAndDisplays() }
+                    }.padding(.top, 12)
+                }.padding(8)
             }.padding(14).disabled(controller.isBusy)
+        }.onDisappear { controller.stopMicrophoneTest() }
+    }
+
+    private func microphoneRouteDescription(_ selection: DeviceSelection?) -> String {
+        guard let selection else { return "No microphone available" }
+        switch selection.source {
+        case .matchedDisplay: return "Built-in microphone · matched automatically"
+        case .assignedDisplay: return "Custom · \(controller.microphoneLabel(selection.device))"
+        case .fallback, .systemDefault: return "Fallback · \(controller.microphoneLabel(selection.device))"
         }
+    }
+
+    private func microphoneTestButton(screenID: String?) -> some View {
+        Button("Test Microphone…") { controller.identifyMicrophone(screenID: screenID) }
+            .disabled(controller.microphoneSelection(screenID: screenID) == nil || !controller.microphoneAuthorized || microphoneTester.isRunning)
     }
 
     private func microphonePicker(_ title: String, selection: Binding<String>, defaultTitle: String = "System default") -> some View {
         Picker(title, selection: selection) {
             Text(defaultTitle).tag("")
             ForEach(devices.devices) { device in
-                Text(DeviceDisplayName.label(for: device, among: devices.devices) + (device.isDefault ? " (system default)" : "")).tag(device.id)
+                Text(controller.microphoneLabel(device) + (device.isDefault ? " (system default)" : "")).tag(device.id)
             }
             if !selection.wrappedValue.isEmpty, !devices.devices.contains(where: { $0.id == selection.wrappedValue }) {
                 Text("Saved microphone — disconnected").tag(selection.wrappedValue)
             }
         }
+        .disabled(microphoneTester.isRunning)
     }
 
     private var preferencesTab: some View {
@@ -220,6 +295,28 @@ struct SettingsView: View {
                 }
                 Button("Reset Dictation and Refresh Devices") { controller.reset() }
             }.padding(14)
+        }
+    }
+}
+
+struct DisplayMicrophoneRow: View {
+    let title: String
+    let detail: String
+    let automatic: Bool
+    let testEnabled: Bool
+    let test: () -> Void
+
+    var body: some View {
+        HStack(spacing: 14) {
+            Image(systemName: "display").font(.system(size: 25)).foregroundStyle(.teal)
+                .frame(width: 44, height: 44).background(Color.teal.opacity(0.1), in: RoundedRectangle(cornerRadius: 10))
+            VStack(alignment: .leading, spacing: 4) {
+                Text(title).font(.headline)
+                Text(detail).font(.caption).foregroundStyle(.secondary)
+            }
+            Spacer()
+            if automatic { Image(systemName: "checkmark.circle.fill").foregroundStyle(.teal).accessibilityLabel("Matched automatically") }
+            Button("Test…", action: test).disabled(!testEnabled)
         }
     }
 }

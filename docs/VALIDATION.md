@@ -1,5 +1,15 @@
 # Swift build validation
 
+## Dictation recovery and display microphones — 0.1.5 (build 9), 2026-11-02
+
+- `make all` passed: 88 Swift tests executed, 87 passed and the optional real-model fixture test skipped because its fixture environment variables were not configured. All seven bootstrap regression checks passed. Packaging verified the executable, bundle metadata, ad hoc signatures, portable dependencies and noninteractive self-check.
+- Regression coverage includes disabled keyboard listeners and recovery, transcript expiry and replacement, bounded diagnostic logs, microphone-test cleanup, volume history, automatic display/microphone matching, ambiguous or missing hardware identities, explicit overrides, and decoding existing settings.
+- The packaged read-only `--display-microphone-check` matched both connected Studio Displays to their microphones by hardware identity, without capturing audio. The installed app independently reported two matches. Hardware serial numbers and device IDs were not recorded in diagnostics or committed as fixtures.
+- Native UI previews were rendered and inspected for the live listening waveform, processing and recovery notices, and automatic-microphone Settings rows. The user subsequently confirmed the installed build's automatic matching and live waveform worked well, and reported improved Chrome form dictation.
+- Updating the ad hoc app required restoring macOS grants. Running-app diagnostics then confirmed Microphone, Accessibility and Input Monitoring access, an enabled keyboard listener, and successful recording/transcription cycles. The original intermittent Chrome symptom does not have a conclusively isolated root cause; posting paste events is deliberately logged as unverified delivery, and every recognized result remains available under Copy Dictation for five minutes.
+
+This is validation of the development Mac and the user-confirmed smoke checks, not completion of every manual case below. Installation on another Mac, all supported macOS versions, the full unplug/sleep/focus-change matrix, and the optional real-model fixture test remain outstanding. Build 9 is the confirmed local baseline; updating source on GitHub does not itself publish a release asset.
+
 ## Public release 0.1.4 (build 5) — 2026-09-17
 
 Validated on an Apple Silicon Mac running macOS 26.5.1 with Swift 6.3.3. This release uses the merged native app and public-release preparation changes; the open custom-vocabulary and cleanup features are not included.
