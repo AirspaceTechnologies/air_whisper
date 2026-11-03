@@ -3,12 +3,28 @@ import ApplicationServices
 import AVFoundation
 import AirWhisperCore
 import AirWhisperSpeech
+import AirWhisperAudio
 
 @main
 enum AirWhisperMain {
     @MainActor
     static func main() async {
         let arguments = Array(CommandLine.arguments.dropFirst())
+        if arguments.contains("--display-microphone-check") {
+            let displays = DisplayContext.displays
+            let snapshots = displays.compactMap { display in
+                display.number.map { DisplayMicrophoneDiscovery.Display(id: display.id, number: $0) }
+            }
+            let devices = AudioDeviceManager().devices
+            let matches = await Task.detached(priority: .utility) {
+                DisplayMicrophoneDiscovery.discover(displays: snapshots, devices: devices)
+            }.value
+            print("Automatically matched \(matches.count) of \(displays.count) displays. No audio was captured.")
+            for (index, display) in displays.enumerated() {
+                print("Display \(index + 1): \(matches[display.id] == nil ? "no unambiguous match" : "microphone matched by hardware identity")")
+            }
+            return
+        }
         if arguments.contains("--permission-status") {
             // Read authorization only, before creating the app or any input services.
             // None of these checks request access or open a device.
@@ -42,7 +58,7 @@ enum AirWhisperMain {
             return
         }
         if arguments.contains("--help") || arguments.contains("-h") {
-            print("AirWhisper [--version | --permission-status | --self-check | --transcribe-file PATH --model MODEL_PATH [--expect-text TEXT]]")
+            print("AirWhisper [--version | --permission-status | --display-microphone-check | --self-check | --transcribe-file PATH --model MODEL_PATH [--expect-text TEXT]]")
             print("--permission-status reports access for this process without requesting permissions or opening audio devices.")
             print("The file check reports success and transcript length only; it does not print speech content.")
             return

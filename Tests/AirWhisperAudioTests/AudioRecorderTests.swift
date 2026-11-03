@@ -1,10 +1,99 @@
 import AirWhisperCore
+import Combine
 import XCTest
 @testable import AirWhisperAudio
 
 /// Uses injected permission and capture drivers; never opens a microphone or prompts for permission.
 @MainActor
 final class AudioRecorderTests: XCTestCase {
+    func testMicrophoneMeterHandlesSilenceSpeechAndInvalidSamples() {
+        XCTAssertEqual(AudioMeter.level([]), 0)
+        XCTAssertEqual(AudioMeter.level([0, 0]), 0)
+        XCTAssertEqual(AudioMeter.level([.nan]), 0)
+        XCTAssertEqual(AudioMeter.level([.infinity]), 0)
+        XCTAssertEqual(AudioMeter.level([0.001, -0.001]), 0, accuracy: 0.001)
+        XCTAssertEqual(AudioMeter.level([0.1, -0.1]), 2.0 / 3.0, accuracy: 0.001)
+        XCTAssertEqual(AudioMeter.level([1, -1]), 1)
+        XCTAssertEqual(AudioMeter.level([2]), 1)
+    }
+
+    func testMicrophoneTestStopsAtLimitAndCanRestart() async throws {
+        let starting = expectation(description: "first test starting")
+        let driver = FakeCaptureDriver(starting: starting)
+        let recorder = AudioRecorder(driver: driver, authorize: { true })
+        let tester = MicrophoneTester(recorder: recorder)
+        tester.start(deviceID: "first")
+        await fulfillment(of: [starting], timeout: 2)
+        let firstID = try XCTUnwrap(driver.activeID)
+        let metered = expectation(description: "live input level")
+        let levelObservation = tester.$level.sink { if $0 == 0.75 { metered.fulfill() } }
+        driver.emit(.level(0.75), id: firstID)
+        await fulfillment(of: [metered], timeout: 2)
+        levelObservation.cancel()
+
+        let stopped = expectation(description: "test stops automatically")
+        let stopObservation = tester.$deviceID.sink { if $0 == nil { stopped.fulfill() } }
+        driver.emit(.limitReached, id: firstID)
+        await fulfillment(of: [stopped], timeout: 2)
+        stopObservation.cancel()
+        XCTAssertNil(driver.activeID)
+        XCTAssertFalse(tester.isRunning)
+        XCTAssertEqual(tester.level, 0)
+
+        // Do not reuse an already fulfilled startup expectation.
+        driver.clearStartingExpectation()
+        tester.start(deviceID: "second")
+        XCTAssertEqual(tester.deviceID, "second")
+        tester.start(deviceID: "third")
+        XCTAssertEqual(tester.deviceID, "second", "Only one microphone test can own capture.")
+        driver.emit(.level(1), id: firstID)
+        driver.emit(.failure(.deviceDisconnected), id: firstID)
+        await tester.stopAndWait()
+        XCTAssertNil(driver.activeID)
+        XCTAssertNil(tester.deviceID)
+        XCTAssertEqual(tester.level, 0)
+        XCTAssertFalse(tester.isStopping)
+    }
+
+    func testStoppingMicrophoneTestDuringStartupReleasesCapture() async throws {
+        let starting = expectation(description: "test opening microphone")
+        let driver = FakeCaptureDriver(starting: starting, suspendStart: true)
+        let recorder = AudioRecorder(driver: driver, authorize: { true })
+        let tester = MicrophoneTester(recorder: recorder)
+        tester.start(deviceID: "first")
+        await fulfillment(of: [starting], timeout: 2)
+        tester.stop()
+        XCTAssertTrue(tester.isStopping)
+        driver.resumeStart()
+        await tester.stopAndWait()
+        XCTAssertNil(driver.activeID)
+        XCTAssertNil(tester.deviceID)
+        XCTAssertFalse(tester.isStopping)
+    }
+
+    func testMicrophoneGraphKeepsOnlyRecentLevelsAndResetsForNextDevice() async throws {
+        let starting = expectation(description: "meter started")
+        let driver = FakeCaptureDriver(starting: starting)
+        let tester = MicrophoneTester(recorder: AudioRecorder(driver: driver, authorize: { true }))
+        tester.start(deviceID: "first")
+        await fulfillment(of: [starting], timeout: 2)
+        let id = try XCTUnwrap(driver.activeID)
+        let received = expectation(description: "latest level received")
+        let observation = tester.$levelHistory.sink { if $0.last == 1 { received.fulfill() } }
+        for _ in 0..<110 { driver.emit(.level(0.2), id: id) }
+        driver.emit(.level(1), id: id)
+        await fulfillment(of: [received], timeout: 2)
+        observation.cancel()
+        XCTAssertEqual(tester.levelHistory.count, 100)
+        XCTAssertEqual(tester.levelHistory.last, 1)
+        await tester.stopAndWait()
+        XCTAssertEqual(tester.levelHistory.count, 100, "Keep the graph visible after automatic stop for comparison.")
+        driver.clearStartingExpectation()
+        tester.start(deviceID: "second")
+        XCTAssertTrue(tester.levelHistory.isEmpty)
+        await tester.stopAndWait()
+    }
+
     func testAlreadyCancelledTaskDoesNotRequestPermission() async {
         let driver = FakeCaptureDriver()
         var permissionRequests = 0
@@ -183,7 +272,7 @@ private actor DeferredPermission {
 private final class FakeCaptureDriver: AudioCaptureDriving {
     private(set) var activeID: UUID?
     private(set) var startCount = 0
-    private let starting: XCTestExpectation?
+    private var starting: XCTestExpectation?
     private let suspendStart: Bool
     private let stopping: XCTestExpectation?
     private let suspendStop: Bool
@@ -238,6 +327,7 @@ private final class FakeCaptureDriver: AudioCaptureDriving {
     }
 
     func currentID() -> UUID? { activeID }
+    func clearStartingExpectation() { starting = nil }
     func emit(_ event: CaptureEvent, id: UUID) { handlers[id]?(id, event) }
     nonisolated func shutdown() {}
 }

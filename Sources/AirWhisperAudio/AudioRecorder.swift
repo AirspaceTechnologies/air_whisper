@@ -22,7 +22,7 @@ public enum AudioRecordingError: LocalizedError {
 }
 
 enum CaptureEvent {
-    case firstSamples, failure(AudioRecordingError), limitReached
+    case firstSamples, failure(AudioRecordingError), limitReached, level(Float)
 }
 
 protocol AudioCaptureDriving: AnyObject {
@@ -42,6 +42,8 @@ public final class AudioRecorder {
     public var onFirstSamples: (() -> Void)?
     public var onFailure: ((String) -> Void)?
     public var onLimitReached: (() -> Void)?
+    /// Normalized meter level, delivered at most ten times per second on the main actor.
+    public var onLevel: ((Float) -> Void)?
 
     private let driver: AudioCaptureDriving
     private let authorize: () async -> Bool
@@ -80,6 +82,7 @@ public final class AudioRecorder {
                         case .firstSamples: self.onFirstSamples?()
                         case .failure(let error): self.onFailure?(error.localizedDescription)
                         case .limitReached: self.onLimitReached?()
+                        case .level(let level): self.onLevel?(level)
                         }
                     }
                 }
@@ -136,6 +139,7 @@ private final class CaptureWorker: NSObject, AudioCaptureDriving, AVCaptureAudio
     private var buffer: LimitedAudioBuffer?
     private var failure: AudioRecordingError?
     private var firstSamplesSent = false
+    private var lastLevelTime: TimeInterval = 0
     private var event: ((UUID, CaptureEvent) -> Void)?
     private var limitTimer: DispatchSourceTimer?
     private var firstFrameTimer: DispatchSourceTimer?
@@ -174,6 +178,7 @@ private final class CaptureWorker: NSObject, AudioCaptureDriving, AVCaptureAudio
                     self.converter = PCMConverter()
                     self.failure = nil
                     self.firstSamplesSent = false
+                    self.lastLevelTime = 0
                     self.event = event
                     self.observe(session: session, device: device, id: id)
                     self.scheduleTimers(id: id, maximumDuration: maximumDuration)
@@ -227,6 +232,11 @@ private final class CaptureWorker: NSObject, AudioCaptureDriving, AVCaptureAudio
             let samples = try converter?.convert(sampleBuffer) ?? []
             guard !samples.isEmpty else { return }
             buffer?.append(samples)
+            let now = ProcessInfo.processInfo.systemUptime
+            if now - lastLevelTime >= 0.1 {
+                lastLevelTime = now
+                event?(id, .level(AudioMeter.level(samples)))
+            }
             if !firstSamplesSent {
                 firstSamplesSent = true
                 firstFrameTimer?.cancel()
@@ -312,5 +322,15 @@ private final class CaptureWorker: NSObject, AudioCaptureDriving, AVCaptureAudio
         failure = nil
         event = nil
         firstSamplesSent = false
+    }
+}
+
+enum AudioMeter {
+    static func level(_ samples: [Float]) -> Float {
+        guard !samples.isEmpty else { return 0 }
+        let power = samples.reduce(0.0) { $0 + Double($1) * Double($1) } / Double(samples.count)
+        guard power.isFinite, power > 0 else { return 0 }
+        // A logarithmic -60...0 dBFS scale makes quiet speech visible.
+        return Float(min(1, max(0, (10 * log10(power) + 60) / 60)))
     }
 }

@@ -16,6 +16,7 @@ struct DisplayChoice: Identifiable {
     let id: String
     let name: String
     let screen: NSScreen
+    var number: UInt32? { (screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value }
 }
 
 @MainActor
@@ -28,7 +29,10 @@ enum DisplayContext {
                   let uuid = CGDisplayCreateUUIDFromDisplayID(number.uint32Value)?.takeRetainedValue()
             else { return nil }
             let id = CFUUIDCreateString(kCFAllocatorDefault, uuid) as String
-            return DisplayChoice(id: id, name: screen.localizedName, screen: screen)
+            // We number displays by physical arrangement; avoid a second, conflicting
+            // enumeration suffix that macOS adds to identical display names.
+            let name = screen.localizedName.replacingOccurrences(of: #" \(\d+\)$"#, with: "", options: .regularExpression)
+            return DisplayChoice(id: id, name: name, screen: screen)
         }
     }
 

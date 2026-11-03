@@ -17,6 +17,10 @@ Run `make all` for automated checks. Checked items record user-confirmed results
 
 ## Dictation and keyboard
 
+- [ ] After replacing an ad hoc build, Setup reports an unusable listener even if macOS permission toggles remain on. Re-add the installed app in Accessibility/Input Monitoring and verify recovery.
+- [ ] Press Fn in Settings: the Keyboard access check shows a fresh detection time without recording audio. Reset/Recheck recreates a failed listener; transient disabling recovers without a restart.
+- [ ] A Secure Input block is shown separately from missing permissions and cancels an in-progress recording.
+
 - [ ] Disable the old Hammerspoon dictation module before testing.
 - [ ] Dictate into TextEdit, VS Code, Terminal and a browser text field.
 - [x] Basic dictation insertion in Slack desktop 4.50.143 with Air Whisper 0.1.2, confirmed by the user after restoring Accessibility access.
@@ -37,6 +41,12 @@ Run `make all` for automated checks. Checked items record user-confirmed results
 
 ## Clipboard and UI
 
+- [ ] Listening shows live teal amplitude bars that follow speech and settle during silence. Release switches to the processing overlay; cancellation clears the graph. Overlays never steal focus or display microphone IDs.
+- [ ] Check overlay text wrapping, light/dark mode, Reduce Motion, fullscreen, and both display sizes.
+
+- [ ] After both a successful paste and a missing paste, Copy Dictation offers the latest result for five minutes. Copying it twice works; a cancelled or silent later recording does not erase it. A new recognized result replaces it and starts a fresh five-minute expiry.
+- [ ] Reset, sleep/lock, and quit clear Copy Dictation immediately. An older result's expiry does not clear a newer result.
+- [ ] Reproduce a failed Chrome paste while watching the unified log: distinguish missing hotkey, missing audio, empty transcription, rejected focus, and posted-but-unconfirmed events. Confirm logs contain no dictated or clipboard text.
 - [ ] Previous text, image, rich text and multiple clipboard items survive.
 - [ ] New content copied during paste restoration is preserved.
 - [ ] Keystroke mode works in an app blocking paste.
@@ -45,7 +55,11 @@ Run `make all` for automated checks. Checked items record user-confirmed results
 
 ## Devices and recovery
 
-- [ ] Pair each Studio Display mic by speaking near it and verify focus-following selection.
+- [ ] Both Studio Displays show Matched automatically without manual assignment. Move a focused text field between displays and verify each session uses its matched microphone. Replug/reorder displays and verify matching refreshes.
+- [ ] Advanced overrides take priority, returning to Automatic clears the override, and unavailable or ambiguous hardware uses the fallback. One microphone everywhere ignores display matching.
+- [ ] Optional Test opens a sound-check graph on the selected display. Stop and the twenty-second limit release the mic; no transcript is produced. Normal dictation stops the test before recording.
+- [ ] Stop a microphone test during startup, close/switch away from Microphones, unplug its device, and sleep/lock: testing stops without leaving the microphone open.
+- [ ] Verify both Studio Display microphones are matched by hardware identity and focus-following selection works without a listening comparison.
 - [ ] Replug/reorder same-named devices; native ID assignments remain correct.
 - [ ] Unplug a chosen mic before/during capture; fallback/error leaves no stuck recording.
 - [ ] Implicit fallback avoids Bluetooth if a built-in mic exists; explicit Bluetooth selection works.

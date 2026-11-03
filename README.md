@@ -64,7 +64,7 @@ If Fn does nothing after an update, check Air Whisper's own Settings status. Mis
 - Another key while held cancels; ordinary keyboard shortcuts pass through.
 - Taps under half a second are discarded. Capture stops at 120 seconds. Presses during transcription are ignored.
 - If focus changes during transcription, the app avoids pasting into the unexpected destination and offers the result for explicit copying.
-- Pick a fixed mic or use **Auto** with per-display assignments. Choices persist by native device ID, so duplicate names and enumeration order do not swap the assignments. Initial display-to-microphone assignment is manual.
+- Choose **Automatic · follow active display** to match supported Studio Displays to their built-in microphones, or **One microphone everywhere** for a fixed input. Optional overrides live under Advanced microphone options.
 - Automatic fallback prefers built-in audio over a Bluetooth headset mic. Explicit selections are honored.
 - Launch at login is a user-controlled setting.
 - Open settings, reset dictation, or quit from the microphone icon in the menu bar. Closing Settings does not quit the app.
@@ -114,7 +114,7 @@ git pull --ff-only
 make all
 ```
 
-`APP_VERSION` sets the displayed app version and `APP_BUILD` sets its build number. Defaults come from `Resources/Info.plist` (currently `0.1.4` and `5`); increase them for each distributed update and match the release tag to the version. The overrides change the packaged app, not the checked-in bundle metadata.
+`APP_VERSION` sets the displayed app version and `APP_BUILD` sets its build number. Defaults come from `Resources/Info.plist` (currently `0.1.5` and `9`); increase them for each distributed update and match the release tag to the version. The overrides change the packaged app, not the checked-in bundle metadata.
 
 Test the resulting app using the [manual checklist](test-checklist.md), including replacement of an existing installation. Keep the reviewed commit SHA with your release notes. Attach **both** `dist/Air-Whisper.zip` and `dist/SHA256SUMS` to a draft GitHub Release for review. An approved shared folder is also suitable for internal review builds.
 
@@ -138,7 +138,7 @@ This creates a draft for review. Check its version, commit, notes, and attached 
 - Embedded inference requires no HTTP server, listening port, or network connection.
 - Explicit model downloads contact Hugging Face and its download hosting. Exact file size and SHA-256 are verified before atomic installation; dictation then works offline.
 - Clipboard insertion temporarily places the transcript on the system clipboard. Clipboard managers, Universal Clipboard, and destination apps may retain or sync it; restoring the previous clipboard cannot recall copies they have taken. **Preferences → Insert using → Simulated typing** avoids the clipboard for automatic insertion. Explicit **Copy Dictation** writes the transcript to the clipboard and leaves it there for you to paste.
-- When automatic insertion fails, **Copy Dictation** holds the result in memory for up to five minutes. Starting a new recording, resetting dictation, sleeping/locking, or quitting clears it. The app does not maintain a transcript history.
+- **Copy Dictation** keeps the latest recognized result in memory for five minutes, even after an automatic paste. Copying it or starting another recording does not erase it. A new recognized result replaces it; resetting dictation, sleeping/locking, or quitting clears it. The app does not maintain a transcript history.
 - New models live in `~/Library/Application Support/Air Whisper/models` in private app directories. Legacy models are read without being moved or deleted.
 - Settings use the app's macOS preferences. Diagnostics omit audio and transcript content. The explicit `--transcribe-file` diagnostic reports the supplied file's duration and recognized character count.
 - The model stays loaded for responsive dictation. Medium English needs more RAM and processing time than Small English.
@@ -155,9 +155,25 @@ For support, the packaged executable also accepts `--version` and `--permission-
 
 See [validation results](docs/VALIDATION.md) for the tested build, real inference checks, and remaining hardware checks.
 
-If the hotkey is inactive, check permissions and try Right Option. For wrong-microphone problems, inspect the display assignment; same-named mics have distinct IDs. For model errors, use a verified official model. Embedded inference supports cooperative cancellation; an underlying native-library/GPU hang can require quitting and reopening the app.
+If the hotkey is inactive, open **Setup → Keyboard access check**. Air Whisper verifies that its macOS keyboard listener is actually enabled and recreates a failed listener. Press the shortcut in Settings to confirm detection without recording audio. A permission checkbox alone is not a successful test: ad hoc updates can leave grants tied to the old build. If the listener remains blocked, quit the app, remove its entries from both **Accessibility** and **Input Monitoring**, re-add `/Applications/Air Whisper.app`, enable access, and reopen it. **Recheck Keyboard Access** retries the listener without restarting the app. Secure Input is reported separately; finish password entry in the other app before retrying. If Fn is not detected with an enabled listener, try Right Option. For wrong-microphone problems, inspect the display assignment; same-named mics have distinct IDs. For model errors, use a verified official model. Embedded inference supports cooperative cancellation; an underlying native-library/GPU hang can require quitting and reopening the app.
 
-If dictation appears under **Copy Dictation** but is not inserted into Slack or a Chrome web field, recording and transcription have succeeded. Air Whisper may not have been able to identify the focused text field when recording began. It requests accessibility support automatically from Slack and Google Chrome/Chromium. After opening or switching to the app, click the intended field and give it a couple of seconds before the first dictation. Copy any waiting transcript from the menu, then try again. Keep the same field focused until transcription finishes. A web editor that replaces its focused element may still require manual copying; Air Whisper keeps the original destination check even if a field becomes available later. Changing microphones or insertion mode does not bypass that check.
+If the latest dictation is not inserted into Slack or a Chrome web field, use **Copy Dictation** in the menu or Settings to recover it within five minutes. Posting a paste shortcut does not confirm that the destination inserted the text. Air Whisper requests accessibility support automatically from Slack and Google Chrome/Chromium. After opening or switching to the app, click the intended field and give it a couple of seconds before the first dictation. Keep the same field focused until transcription finishes. A web editor that replaces its focused element may still require manual copying; Air Whisper keeps the original destination check even if a field becomes available later. If a later attempt recognizes no speech, Copy Dictation still contains the previous result until it expires.
+
+In **Settings → Microphones**, **Automatic · follow active display** matches supported Studio Displays to their built-in microphones through hardware identity. The app follows the display containing the focused window. Matching uses the display’s manufacturer serial, its internal USB hub, and the microphone’s USB identity; it does not guess from identical names, enumeration order, or how loudly each microphone hears you. Settings shows **Matched automatically** for a verified pairing. Discovery runs in the background when displays or audio devices change. Ambiguous or unavailable hardware metadata uses your fallback microphone instead.
+
+Use **Test…** only for an optional sound check. **Advanced microphone options** contains a fallback choice and explicit per-display overrides. New explicit overrides take priority over automatic matches; older manual assignments are retained only as a fallback for displays that cannot be matched. **One microphone everywhere** keeps using your chosen input regardless of display.
+
+While dictating, a compact teal waveform follows actual microphone volume; silence settles to a low line. Release the shortcut to transcribe. Starting, processing, and recovery notices use the same compact overlay without device identifiers. Audio-level history is transient and is cleared when the session ends.
+
+The read-only `--display-microphone-check` diagnostic reports matching counts for connected displays without recording audio or printing hardware serials.
+
+Air Whisper keeps local diagnostic files in `~/Library/Logs/Air Whisper/`: `diagnostics.log` and one rotated `diagnostics.previous.log`, each limited to 256 KiB. These files contain only the metadata described below and can be read without administrator access. Air Whisper also writes macOS unified logs under subsystem `org.airspace.AirWhisper`. To inspect the last ten minutes after a failure:
+
+```sh
+/usr/bin/log show --last 10m --style compact --predicate 'subsystem == "org.airspace.AirWhisper"'
+```
+
+For live troubleshooting, replace `show --last 10m` with `stream`. Logs distinguish hotkey events, first audio, capture duration, transcription duration and character count, rejected focus checks, posted paste events, and clipboard restoration. `event_posted=true` means the events were submitted, not that the target acknowledged insertion. Logs contain no audio, transcript or clipboard text, field values, window titles, or microphone IDs. They are retained by macOS under its normal log retention policy.
 
 ## Migrating from Lua
 
@@ -165,7 +181,7 @@ The original prototype is preserved in [legacy/](legacy/README.md); its installe
 
 Before enabling the Swift app, disable `require("dictate")` in Hammerspoon's `init.lua` and reload Hammerspoon, or quit Hammerspoon if it serves no other purpose. Otherwise both tools can react to the same key. Building the Swift app never edits that configuration.
 
-Models can be reused. Select display/microphone assignments again: old enumeration-based labels cannot safely be converted to native IDs.
+Models can be reused. Supported Studio Displays are matched automatically; set any custom microphone overrides again because old enumeration-based labels cannot safely be converted to native IDs.
 
 ## Uninstall
 

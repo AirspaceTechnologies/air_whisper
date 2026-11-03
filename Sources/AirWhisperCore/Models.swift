@@ -81,6 +81,9 @@ public struct DictationSettings: Codable, Equatable, Sendable {
     public var microphoneMode: MicrophoneMode = .auto
     public var fixedDeviceID: String?
     public var screenMicrophones: [String: String] = [:]
+    /// Explicit overrides made after automatic hardware matching was introduced.
+    /// Optional so existing settings continue to decode without a migration failure.
+    public var displayMicrophoneOverrides: [String: String]?
     public var model: SpeechModel = .smallEnglish
     public var minimumDuration: TimeInterval = 0.5
     public var maximumDuration: TimeInterval = 120
